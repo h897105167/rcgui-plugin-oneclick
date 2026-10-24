@@ -3,7 +3,7 @@
 **RCGUI 的「一键 rclone」插件** —— 搜索 / 校验 / 下载 / 安装本机 rclone，按面板上的启动参数拉起 `rclone rcd`，并可随程序自动启动、退出时停止。
 
 > 本体仓库：[h897105167/rclone_gui_windows](https://github.com/h897105167/rclone_gui_windows)
-> 插件开发文档：[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows)
+> 插件开发文档：[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)
 
 本仓库**只包含插件自己**：Rust 源码、`config.json`、打包脚本、发版 CI。
 面板不是代码，而是 `config.json` 里的 `plugin_setting` 声明 —— 本体按声明渲染，不认识「一键 rclone」这个名字。
@@ -15,10 +15,10 @@
 
 ## 安装
 
-### 自动（推荐）
+### 内置分发（推荐）
 
-本体启动时按 `plugins/manifest.json` 里登记的版本去 Release 拉包并校验 sha256，解压到
-`%APPDATA%\RCGUI\plugins\onerclone\`。
+内置分发：构建本体时 `scripts/fetch_plugins.ps1` 按 `plugins/manifest.json` 登记的版本与本仓库 [Release](https://github.com/h897105167/rcgui-plugin-oneclick/releases) 下载 zip、校验 sha256，解包到 `crates/app/assets/plugins/onerclone/`；本体启动时再释放到 `%APPDATA%\RCGUI\plugins\onerclone\`。
+升级 = 改本体 manifest 里的 `tag` 与 `sha256`（zip 的哈希）。
 
 ### 手动
 
@@ -102,7 +102,7 @@ bash scripts/pack.sh               # Linux / macOS / CI
 插件是一个 **WASI 命令行程序**：每次调用，本体把一段 JSON 写到 stdin，插件把一段 JSON 写到 stdout。
 需要宿主能力时，插件返回 `{"need":[{"cap":"...","params":{...}}]}`，本体执行后带着结果重新运行插件。
 完整协议、能力清单、面板 schema、命名规则、接入与分发规则见本体的
-**[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows)**。
+**[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)**。
 
 本插件声明的能力：`kv`（设置与历史）、`fs`（查找/解压/写文件）、`http`（下载 rclone 压缩包）、
 `proc`（启动与探测 rclone 进程）、`net`（端口探测）、`env`（数据目录、系统信息）。
