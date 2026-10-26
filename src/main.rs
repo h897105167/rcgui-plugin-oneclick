@@ -231,6 +231,20 @@ fn verified_version(kv: &Value) -> String {
     s(kv_state(kv).get("exe_version"))
 }
 
+/// 「这个 exe 已经通过过校验」是否成立。
+///
+/// 只比对版本号是不够的：用户把 exe 换到另一个路径后，版本号还在，旧逻辑会拿
+/// 一个**没校验过的新文件**直接拉起。因此校验通过时连路径一起记进 `verified_exe`。
+/// 老数据只有 `exe_version`、没有 `verified_exe`，这种情况按「已校验」处理，
+/// 免得升级后把所有老用户都当成未校验、每次启动都重跑一遍校验。
+fn verified_for(kv: &Value, exe: &str) -> bool {
+    if verified_version(kv).is_empty() {
+        return false;
+    }
+    let verified_exe = s(kv_state(kv).get("verified_exe"));
+    verified_exe.is_empty() || verified_exe.eq_ignore_ascii_case(exe)
+}
+
 /// 生成一条 `kv.set` op：合并写回 `_state`（保留宿主写入的 status / lamp / checks）。
 fn state_op(kv: &Value, patch: impl FnOnce(&mut Map<String, Value>)) -> Value {
     let mut st = kv_state(kv);
@@ -316,10 +330,12 @@ fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
             ),
         );
     }
-    if verified_version(kv).is_empty() {
+    // 自动启动现在会先自动校验一次，所以这里只说明「首次会多花几秒」，
+    // 不再写「点重新校验」——那句话会让人以为自动启动必须先手动校验过才生效。
+    if !exe.is_empty() && !verified_for(kv, &exe) {
         hints.insert(
             "auto_start_hint".into(),
-            json!("⚠ 自动启动需要先通过一次校验（点「重新校验」）"),
+            json!("首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起"),
         );
     }
 
@@ -479,6 +495,9 @@ fn finish_verify(id: u64, form: &Value, exe: &str, provided: &Value) -> Value {
         s.insert("checks".into(), checks);
         s.insert("exe_version".into(), json!(version));
         s.insert("exe_history".into(), json!(hist.clone()));
+        // 记下「校验的是哪个文件」：只记版本号的话，用户换了 exe 路径后
+        // 旧版本号仍然有效，自动启动会把一个没校验过的新文件直接拉起来。
+        s.insert("verified_exe".into(), json!(exe));
     })];
     done_ops(
         id,
@@ -1061,6 +1080,74 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
                 }),
             )
         }
+        // 自动启动但还没校验过：先校验一次再接着拉起（不再静默跳过）
+        "verify" => {
+            let exe = state_s(&rq.state, "exe");
+            let meta = got(&rq.provided, "meta");
+            let v = judge(
+                &exe,
+                &meta,
+                &got(&rq.provided, "pe"),
+                &got(&rq.provided, "sig"),
+                &got(&rq.provided, "run"),
+            );
+            let kv = got(&rq.provided, "kv");
+            let checks = json!(v.checks);
+            if !v.ok {
+                // 校验没过：不拉起进程，但要让用户看得见（面板 + toast）。
+                // 「静默跳过」是这个功能之前最大的坑。
+                let msg = format!("自动启动已取消：rclone 校验未通过（{}）", v.detail);
+                let ops = vec![state_op(&kv, |st| {
+                    st.insert("checks".into(), checks);
+                })];
+                return done_ops(
+                    id,
+                    ops,
+                    json!({
+                        "status": msg,
+                        "lamp": "err",
+                        "checks": v.checks,
+                        "toast": { "level": "err", "message": msg },
+                        "enabled": { "start": true, "stop": false, "revalidate": true },
+                    }),
+                );
+            }
+            // 校验通过：把版本 / 检查项 / 历史合并进 kv 的副本带下去。
+            // 真正落盘放在 launch 那一轮的 done_ops 里（一轮只能二选一：need 或 ops）。
+            let version = v.version.clone();
+            let mut hist = exe_history(&kv);
+            history_push(&mut hist, &exe);
+            let mut merged = kv_state(&kv);
+            merged.insert("checks".into(), checks);
+            merged.insert("exe_version".into(), json!(version));
+            merged.insert("exe_history".into(), json!(hist));
+            merged.insert("verified_exe".into(), json!(exe));
+            let mut kv2 = kv.clone();
+            if let Some(o) = kv2.as_object_mut() {
+                o.insert("_state".into(), Value::Object(merged));
+            }
+            let mut state = keep(rq.state.clone(), "step", json!("read2"));
+            state = keep(state, "meta", meta);
+            state = keep(state, "kv", kv2);
+            // 校验时已经看过 exe 本身，这里只补一次端口探测，
+            // 保留「端口上已有实例就直接连」的原行为。
+            need(
+                id,
+                state,
+                vec![json!({
+                    "cap": "net.port_open",
+                    "key": "port",
+                    "params": { "port": fport(form), "timeout_ms": 800 }
+                })],
+            )
+        }
+        // 校验后的读取轮：kv / meta 由上一轮带过来，只补端口探测结果
+        "read2" => {
+            let mut state = rq.state.clone();
+            state = keep(state, "port_open", got(&rq.provided, "port"));
+            let kv = state.get("kv").cloned().unwrap_or(Value::Null);
+            launch_decision(id, &state, form, &kv, &Value::Null, auto)
+        }
         other => fail(id, &format!("内部状态异常：{other}")),
     }
 }
@@ -1143,11 +1230,18 @@ fn launch_decision(
             fail(id, &format!("rclone.exe 不存在：{exe}"))
         };
     }
-    if auto && verified_version(kv).is_empty() {
-        // 没校验过就不自动启动：静默留一条状态，等用户自己点
-        return done(
+    if auto && !verified_for(kv, &exe) {
+        // 旧行为：没校验过就静默跳过，用户只看到「自动启动已跳过」，rclone 根本没起来
+        // —— 这正是「随程序自动启动」形同失效的主因（面板里那句「自动启动需要先通过
+        // 一次校验」根本没人会去点）。现在改成：先自动校验一次，通过后接着拉起。
+        //
+        // 校验结论只能由**本次调用的最后一轮**写进 kv（中间轮次只发 need，宿主不会
+        // 执行同一轮的 ops），所以这里不要写完就返回，而是把校验证据要到手，
+        // 由后续 `read2` 轮把结论带在 state 里继续走启动流程。
+        return need(
             id,
-            json!({ "status": "自动启动已跳过：rclone 尚未通过校验", "lamp": "warn" }),
+            keep(keep(state.clone(), "step", json!("verify")), "exe", json!(exe)),
+            verify_needs(&exe),
         );
     }
 
