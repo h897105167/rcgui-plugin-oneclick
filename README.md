@@ -2,7 +2,7 @@
 
 **The one-click rclone plugin for RCGUI** — find a local `rclone.exe`, verify it really is rclone, download a fresh one if there isn't any, launch it as `rclone rcd`, and hand the RC endpoint back to the host.
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
 > Host repository: [h897105167/rclone_gui_windows](https://github.com/h897105167/rclone_gui_windows)
 > Plugin authoring guide: [docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)
@@ -19,72 +19,83 @@ RCGUI never starts rclone itself. This plugin is the exception that keeps that p
 
 | Stage | What it does |
 | --- | --- |
-| Find | `浏览…` for a specific file, `搜索本机` for a quick sweep of the usual locations, `深度扫描` for a full drive scan — only when you ask |
+| Find | Browse… for a specific file, Search this PC for a quick sweep of the usual locations, Deep scan for a full drive scan — only when you ask |
 | Verify | Five pieces of evidence before a path counts as rclone: the file exists, it has a PE header, it carries a signature record, `rclone version` answers, and no earlier record contradicts it |
-| Install | `一键下载并安装` pulls the official build (or the enhanced build) for this machine's architecture and unpacks it next to the plugin's data |
+| Install | Download and install pulls the official build (or the enhanced build) for this machine's architecture and unpacks it next to the plugin's data |
 | Start | `rcd --rc-addr 127.0.0.1:<port>` plus either `--rc-no-auth` or `--rc-user` / `--rc-pass`, as a silent child process with a log file |
-| Connect | With `自动连接` on, the host is told to connect to that endpoint the moment rclone is up |
-| Keep alive | `随程序自动启动` starts rclone whenever RCGUI starts; `退出时停止 rclone` decides whether it dies with the host |
+| Connect | With Connect automatically on, the host is told to connect to that endpoint the moment rclone is up |
+| Keep alive | Start with the app starts rclone whenever RCGUI starts; Stop rclone on exit decides whether it dies with the host |
 
 ## Install
 
-- **随本体分发。** RCGUI 把 `builtin` 插件编进自己的资源，`plugins/manifest.json` 里没有它，也不会去下载它。不需要手动安装。
-- **只有 Windows 构建会被安装。** `config.json` 写着 `"platform": "windows"`，别的平台干脆不出现这个面板。
-- **卸载。** 在 RCGUI 里禁用，面板就消失；卸载会连包带设置一起删。已下载的 rclone 副本留在数据目录里 —— 这个插件不会替你删文件。
+- **Ships with the app.** RCGUI compiles `builtin` plugins into its own assets; they are absent from `plugins/manifest.json` and are never downloaded. Nothing to install by hand.
+- **Only the Windows build ever installs a binary.** `config.json` says `"platform": "windows"`, so on other platforms the panel does not appear at all.
+- **Uninstalling.** Disable it in RCGUI and the panel disappears; uninstalling deletes the package together with its settings. rclone copies already downloaded stay in the data directory — this plugin does not delete files for you.
 
 ## Panel
 
-四个分组，从上到下就是我建议的顺序：先确定可执行文件，再装，再定参数，最后定启动策略。
+Four groups, top to bottom in the order I would work through them: pin down the executable, install if needed, settle the launch arguments, decide the start policy.
 
-| 键 | 控件 | 标签 | 作用 |
+Labels below are the English strings; the panel carries the Chinese original next to every one of them (see [Languages](#languages)).
+
+| Key | Control | Label | What it does |
 | --- | --- | --- | --- |
-| `conn` | status | 运行状态 | 指示灯：rclone 在不在跑、校验过没过 |
-| `g_exe` | group | ① rclone 程序 | 第一节：可执行文件 |
-| `exe` | path | 程序路径 | 手填或浏览；右侧 ▾ 是历史记录 |
-| `pick_exe` | action | 浏览… | 宿主文件对话框，只挑 `.exe` |
-| `search_exe` | action | 搜索本机 | 常见安装位置快扫 |
-| `search_deep` | action | 深度扫描 | 翻遍磁盘找 `rclone.exe` |
-| `revalidate` | action | 重新校验 | 重跑一次五项校验 |
-| `exe_history_hint` | hint | — | 说明右侧 ▾：通过校验的路径自动记入，最多 10 条 |
-| `checks` | checks | — | 校验状态；没校验过时会提醒你先校验 |
-| `g_install` | group | ② 一键安装 | 第二节：下载与安装 |
-| `edition` | select | 版本 | `官方版`（默认）或 `增强版` |
-| `source` | select | 下载源 | `官方源`（默认）或 `镜像优先` |
-| `install_edition_hint` | hint | — | 提醒增强版只在 GitHub Releases 发布 |
-| `install` | action | 一键下载并安装 | 探测架构、下载 zip、解压 |
-| `progress` | progress | — | 下载进度 |
-| `install_hint` | hint | — | 逐阶段的安装状态 |
-| `g_args` | group | ③ 启动参数 | 第三节：`rcd` 的启动参数 |
-| `rc_user` | text | 用户名 | RC 用户名，默认 `gui` |
-| `rc_pass` | password | 密码 | 可以留空：用户名非空就够启用鉴权了 |
-| `port` | number | 端口 | RC 端口，默认 `5572` |
-| `no_auth` | bool | 本地不校验 | 开启 `--rc-no-auth`，只在确实不需要鉴权时才勾 |
-| `silent` | bool | 静默启动 | 默认勾上：不给这个子进程开控制台窗口 |
-| `auto_connect` | bool | 自动连接 | 启动完成后让宿主连上这个端点 |
-| `auth_warning` | hint | — | 参数组合有问题时出现在这里 |
-| `g_boot` | group | ④ 启动策略 | 第四节：随程序起来，随程序退出 |
-| `auto_start` | bool | 随程序自动启动 | 也是 `on_start` 的动作名 |
-| `stop_on_exit` | bool | 退出时停止 rclone | 默认勾上：宿主退出时把子进程一起关掉 |
-| `auto_start_hint` | hint | — | 自动启动失败时给出提示 |
-| `d_run` | divider | — | 把状态与按钮隔开 |
-| `start` | action | 启动 rclone | 主操作：校验、拉起、连接 |
-| `stop` | action | 停止 | 停掉 rclone 并清掉运行状态 |
+| `conn` | status | Run state | Lamp: is rclone running, did verification pass |
+| `g_exe` | group | ① rclone binary | Section one: the executable |
+| `exe` | field | Program path | Type it or browse; the ▾ on the right is the history |
+| `pick_exe` | action | Browse… | Host file dialog, `.exe` only |
+| `search_exe` | action | Search this PC | Quick sweep of the usual install locations |
+| `search_deep` | action | Deep scan | Walks the whole drive looking for `rclone.exe` |
+| `revalidate` | action | Re-check | Runs the five checks again |
+| `exe_history_hint` | hint | — | Explains the ▾: verified paths are recorded automatically, up to 10 |
+| `checks` | checks | — | Verification state; reminds you to verify when it was never run |
+| `g_install` | group | ② One-click install | Section two: download and install |
+| `edition` | field | Edition | Official (default) or Enhanced |
+| `source` | field | Download source | Official (default) or Mirrors first |
+| `install_edition_hint` | hint | — | Reminds you the enhanced build only exists on GitHub Releases |
+| `install` | action | Download and install | Detects the architecture, downloads the zip, unpacks it |
+| `progress` | progress | — | Download progress |
+| `install_hint` | hint | — | Per-stage install state |
+| `g_args` | group | ③ Launch arguments | Section three: what `rcd` is started with |
+| `rc_user` | field | User name | RC user name, `gui` by default |
+| `rc_pass` | field | Password | May be left empty: a non-empty user name is enough to enable auth |
+| `port` | field | Port | RC port, `5572` by default |
+| `no_auth` | field | No auth locally | Adds `--rc-no-auth`; tick it only when auth truly is not needed |
+| `silent` | field | Start silently | On by default: the child process gets no console window |
+| `auto_connect` | field | Connect automatically | Tells the host to connect to this endpoint once rclone is up |
+| `auth_warning` | hint | — | Appears here when the argument combination is wrong |
+| `g_boot` | group | ④ Start policy | Section four: start with the app, die with the app |
+| `auto_start` | field | Start with the app | Also the name of the `on_start` action |
+| `stop_on_exit` | field | Stop rclone on exit | On by default: the child goes down with the host |
+| `auto_start_hint` | hint | — | Speaks up when auto-start failed |
+| `d_run` | divider | — | Separates the state from the buttons |
+| `start` | action | Start rclone | Primary action: verify, launch, connect |
+| `stop` | action | Stop | Stops rclone and clears the run state |
 
 ## What happens when you press Start
 
-1. 五项校验。没通过就停在这里，并把缺口写在 `校验` 里 —— 拉起一个来历不明的 exe 比报错糟得多。
-2. 拒绝无意义的实例。没勾 `本地不校验`、用户名又空着时，插件直接拒绝启动：那样拉起的实例只会对 `core/version`、`rc/list` 之外的所有接口返回 403，对宿主毫无用处。
-3. 拼参数。`rcd --rc-addr 127.0.0.1:<端口>`，然后二选一：`--rc-no-auth`，或者 `--rc-user` 加 `--rc-pass`（密码为空就不带这个参数，rclone 会按"用户:空密码"校验）。
-4. 交给宿主。`proc.start` 起进程，带上 `silent` 与 `keep_on_exit`，日志写到数据目录下的 `logs/oneclick-rclone.log`。
-5. 等端口、再连接。端口通之前不报成功；`自动连接` 开着的话，接着让宿主连上去。
-6. 自动启动走同一条路，只是失败时不弹窗 —— 开机时没人想看一条报错，状态灯会说明一切。
+1. Five checks. Anything missing stops the launch here and names the gap under `checks` — starting an exe of unknown origin is far worse than reporting an error.
+2. Pointless instances are refused. With No auth locally unticked and an empty user name, the plugin declines to start at all: such an instance answers 403 on everything except `core/version` and `rc/list`, which is useless to a host.
+3. Arguments are assembled. `rcd --rc-addr 127.0.0.1:<port>`, then one of two branches: `--rc-no-auth`, or `--rc-user` plus `--rc-pass` (an empty password drops that flag, and rclone checks "user:empty" instead).
+4. The host takes over. `proc.start` spawns the process with `silent` and `keep_on_exit`, and the log lands in `logs/oneclick-rclone.log` under the data directory.
+5. Wait for the port, then connect. Nothing is reported as success until the port answers; with Connect automatically on, the host is connected right after.
+6. Auto-start walks the same path, except a failure stays quiet — nobody wants an error popup at login, and the state lamp says what happened.
 
 ## Download sources
 
-- `官方源`：`downloads.rclone.org` 上的 `version.txt` 与 zip 包。
-- `镜像优先`：先试清华与南大镜像，再退回官方源；某个镜像没有对应目录时会自动跳过。
-- `增强版`：teldrive 后端的构建只出现在 `gulp79/rclone-extra` 的 GitHub Releases 里，镜像源对它无效 —— 这是 `版本` 与 `下载源` 两个下拉唯一的组合限制。
-- 架构取自宿主（`env.info`）：x64、arm64、386 各自对应 rclone 的包名，猜不出来就直接报错，不硬塞一个不匹配的二进制。
+- Official: `version.txt` and the zip archives on `downloads.rclone.org`.
+- Mirrors first: the Tsinghua and Nanjing University mirrors are tried before the official site; a mirror without the matching directory is skipped automatically.
+- Enhanced: teldrive-backend builds appear only in the GitHub Releases of `gulp79/rclone-extra`, so mirrors are useless for them — this is the only restriction the Edition and Download source dropdowns impose on each other.
+- The architecture comes from the host (`env.info`): x64, arm64 and 386 map to rclone's package names; when it cannot be worked out the plugin errors out instead of forcing a mismatched binary.
+
+## Languages
+
+The panel and every runtime message follow the host's UI language, and the strings live in the plugin rather than in the host.
+
+- `config.json` carries each `label`, `placeholder` and hint `text` as `{"zh": …, "en": …}`, and `plugin_setting.version` is `2` so the host knows to resolve both. Dropdown options map a stable `value` (`官方版`, `镜像优先`, `模板一`) to a `label` in the same two languages — the value is what the plugin compares against, so the wire format never changes with the UI.
+- Runtime messages (`status`, `toast`, `hints`, `checks`, manifest) go through `src/i18n.rs` and the `src/i18n.json` table compiled into the wasm. The message id is the Chinese original itself, so the source reads the way the string does, and placeholders keep the shape `{}` or `{name}`.
+- The host passes `params.lang` on every call. Anything starting with `zh` — or no `lang` at all, as older hosts send — shows the Chinese original; everything else shows English, which means a new language costs nothing and degrades to English rather than to a blank panel.
+- An id missing from the table falls back to the Chinese original, on purpose: a missed translation should leak a Chinese sentence, never an empty screen.
 
 ## Building
 
@@ -94,32 +105,34 @@ cargo build --release --target wasm32-wasip1
 pwsh -File scripts/pack.ps1
 ```
 
-bash 下用 `bash scripts/pack.sh`，两个脚本等价：构建 wasm、组装 `dist/<id>-<版本>/`（`config.json`、`main.wasm`、`check.sha256`）、打成 zip 并按本插件实际使用的 `id`（`onerclone`）命名。由于它是内置插件，发版不需要改宿主的 manifest —— 重新构建 RCGUI 就会带上新版本。
+Under bash, `bash scripts/pack.sh` does the same thing: build the wasm, assemble `dist/<id>-<version>/` (`config.json`, `main.wasm`, `check.sha256`), zip it, and name everything after the `id` this plugin actually uses (`onerclone`). Because it is a builtin plugin, a release needs no change to the host manifest — rebuilding RCGUI picks up the new version.
 
 ```
-config.json                     身份、能力、生命周期与整个面板
-src/main.rs                     插件本体，单文件
-Cargo.toml                      wasm 构建参数与依赖
-scripts/pack.ps1                构建、组装 dist/<id>-<版本>、打印 sha256
-scripts/pack.sh                 同上，给 bash 与 CI 用
-.github/workflows/release.yml   tag -> 校验版本 -> 构建 -> GitHub Release
+config.json                     identity, capabilities, lifecycle, the whole panel
+src/main.rs                     the plugin itself, single file
+src/i18n.rs                     language tag handling and message formatting
+src/i18n.json                   Chinese message id -> English string
+Cargo.toml                      wasm build settings and dependencies
+scripts/pack.ps1                build, assemble dist/<id>-<version>, print sha256
+scripts/pack.sh                 same, for bash and CI
+.github/workflows/release.yml   tag -> check version -> build -> GitHub Release
 ```
 
 ## Plugin protocol
 
-- 宿主把 `main.wasm` 当 WASI 命令跑，每轮从 stdin 读一条 JSON 请求。
-- 一轮的应答要么是结果，要么是 `{"need":[...]}`，向宿主申请能力调用；宿主答复后这一轮继续。
-- 声明能力 `kv`、`fs`、`http`、`proc`、`net`、`env` —— 没有 `ui`（面板全靠 `config.json`），也没有 `rclone`（这个插件自己和 rclone 打交道）。
-- 安装、校验、启动都是状态机：`step` 存在 `state` 里过轮次，所以下载和解压可以跨很多轮慢慢走。
-- 遇到不认识的 action 会回 `未知动作: <名字>`，而不是把这一轮弄崩。
+- The host runs `main.wasm` as a WASI command and feeds one JSON request per round on stdin.
+- A round answers either with a result or with `{"need":[...]}`, asking the host for a capability call; the round continues once the host replies.
+- Declared capabilities: `kv`, `fs`, `http`, `proc`, `net`, `env` — no `ui` (the panel lives entirely in `config.json`) and no `rclone` (this plugin talks to rclone itself).
+- Install, verify and start are state machines: `step` is kept in `state` across rounds, so downloads and extraction can take as many rounds as they need.
+- An unrecognised action answers `Unknown action: <name>` instead of breaking the round.
 
 ## Known limitations
 
-- 只支持 Windows：真机上的 `.exe`、签名记录、winget 之外的下载源都是 Windows 专属。
-- `深度扫描` 会遍历整块磁盘，很慢 —— 所以它只在用户点它时才跑。
-- 增强版依赖第三方仓库（`gulp79/rclone-extra`），上游不发新构建时只能装到旧版本。
-- 已下载的 rclone 副本按版本号目录存放，插件不会替你清理旧版本。
-- 数字签名检查只记录"签名存在"，不验证签发者是不是 rclone 官方。
+- Windows only: a real `.exe` on disk, signature records and download sources beyond winget are Windows concerns.
+- Deep scan walks an entire drive and is slow — which is why it only runs when the user clicks it.
+- The enhanced build depends on a third-party repository (`gulp79/rclone-extra`); when upstream stops publishing builds, only older versions can be installed.
+- Downloaded rclone copies are stored per version directory, and the plugin never cleans old versions up for you.
+- The signature check only records that a signature exists; it does not verify that the signer is the rclone project.
 
 ## License
 
