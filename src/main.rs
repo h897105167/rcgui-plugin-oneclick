@@ -27,6 +27,8 @@
 //! `enabled` / `values` / `toast` / `rc`。含义见 `crates/app/src/plugins.rs`
 //! 的模块文档。
 
+mod i18n;
+
 use serde_json::{json, Map, Value};
 use std::io::{Read, Write};
 
@@ -66,22 +68,25 @@ fn main() {
 }
 
 fn handle(input: &[u8]) -> Result<Value, String> {
-    let req: Value = serde_json::from_slice(input).map_err(|e| format!("请求解析失败: {e}"))?;
+    let req: Value = serde_json::from_slice(input).map_err(|e| i18n::f("请求解析失败: {e}", &[&e]))?;
     let id = req.get("id").and_then(|v| v.as_u64()).unwrap_or(1);
     let method = s(req.get("method"));
     let params = req.get("params").cloned().unwrap_or(Value::Null);
+    // 宿主每次调用都带当前界面语言（`zh` / `en`）：插件自带译文，
+    // 缺对应语言时 i18n 模块回落英文。老宿主不带这个字段，按中文处理。
+    i18n::set_lang(params.get("lang").and_then(|v| v.as_str()));
     match method.as_str() {
         "manifest" => Ok(json!({
             "id": id,
             "manifest": {
                 "id": "onerclone",
-                "name": "一键 rclone",
+                "name": i18n::t("一键 rclone"),
                 "version": env!("CARGO_PKG_VERSION"),
-                "description": "检测 / 安装 / 启动本机 rclone（rcd），并自动连接"
+                "description": i18n::t("检测 / 安装 / 启动本机 rclone（rcd），并自动连接")
             }
         })),
         "request" => Ok(dispatch(id, &params)),
-        other => Err(format!("未知 method: {other}")),
+        other => Err(i18n::f("未知 method: {other}", &[&other])),
     }
 }
 
@@ -120,7 +125,7 @@ fn dispatch(id: u64, p: &Value) -> Value {
         "autostart" => on_start(id, &rq, true),
         // 停止
         "stop" | "shutdown" => on_stop(id, &rq),
-        other => fail(id, &format!("未知动作: {other}")),
+        other => fail(id, &i18n::f("未知动作: {other}", &[&other])),
     }
 }
 
@@ -305,15 +310,15 @@ fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
 
     let (status, lamp) = if running {
         (
-            format!("正在运行（PID {pid} · 已运行 {}）", fmt_uptime(uptime)),
+            i18n::f("正在运行（PID {pid} · 已运行 {}）", &[&pid, &fmt_uptime(uptime)]),
             "ok",
         )
     } else if exe.is_empty() {
-        ("还没有指定 rclone.exe".to_string(), "err")
+        (i18n::t("还没有指定 rclone.exe").to_string(), "err")
     } else if !exe_ok {
-        ("指定的文件不存在".to_string(), "err")
+        (i18n::t("指定的文件不存在").to_string(), "err")
     } else {
-        ("未启动".to_string(), "warn")
+        (i18n::t("未启动").to_string(), "warn")
     };
 
     let mut hints = Map::new();
@@ -335,7 +340,7 @@ fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
     if !exe.is_empty() && !verified_for(kv, &exe) {
         hints.insert(
             "auto_start_hint".into(),
-            json!("首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起"),
+            json!(i18n::t("首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起")),
         );
     }
 
@@ -367,11 +372,11 @@ fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
 fn fmt_uptime(ms: i64) -> String {
     let secs = ms.max(0) / 1000;
     if secs < 60 {
-        format!("{secs} 秒")
+        i18n::f("{secs} 秒", &[&secs])
     } else if secs < 3600 {
-        format!("{} 分钟", secs / 60)
+        i18n::f("{} 分钟", &[&(secs / 60)])
     } else {
-        format!("{} 小时 {} 分钟", secs / 3600, (secs % 3600) / 60)
+        i18n::f("{} 小时 {} 分钟", &[&(secs / 3600), &((secs % 3600) / 60)])
     }
 }
 
@@ -407,7 +412,7 @@ fn on_pick(id: u64, rq: &Rq) -> Value {
                 "cap": "fs.pick_file",
                 "key": "pick",
                 "params": {
-                    "title": "选择 rclone.exe",
+                    "title": i18n::t("选择 rclone.exe"),
                     "filters": ["exe"],
                     "start_dir": fstr(&rq.form, "exe")
                 }
@@ -420,7 +425,7 @@ fn on_pick(id: u64, rq: &Rq) -> Value {
             return done(
                 id,
                 json!({
-                    "status": "未选择文件",
+                    "status": i18n::t("未选择文件"),
                     "lamp": "warn",
                     "enabled": { "start": !fstr(&rq.form, "exe").is_empty(), "stop": false },
                 }),
@@ -445,7 +450,7 @@ fn on_revalidate(id: u64, rq: &Rq) -> Value {
         state_s(&rq.state, "exe")
     };
     if exe.is_empty() {
-        return fail(id, "还没有设置 rclone.exe 路径");
+        return fail(id, &i18n::t("还没有设置 rclone.exe 路径"));
     }
     if st.is_empty() {
         return need(
@@ -476,12 +481,12 @@ fn finish_verify(id: u64, form: &Value, exe: &str, provided: &Value) -> Value {
             id,
             ops,
             json!({
-                "status": format!("校验未通过：{}", v.detail),
+                "status": i18n::f("校验未通过：{}", &[&v.detail]),
                 "lamp": "err",
                 "checks": v.checks,
                 "values": { "exe": exe },
                 "choices": { "exe": exe_history(&kv) },
-                "toast": { "level": "err", "message": format!("rclone 校验未通过：{}", v.detail) },
+                "toast": { "level": "err", "message": i18n::f("rclone 校验未通过：{}", &[&v.detail]) },
                 "enabled": { "start": false, "stop": false, "revalidate": true },
             }),
         );
@@ -503,12 +508,12 @@ fn finish_verify(id: u64, form: &Value, exe: &str, provided: &Value) -> Value {
         id,
         ops,
         json!({
-            "status": format!("校验通过（rclone {}）", v.version),
+            "status": i18n::f("校验通过（rclone {}）", &[&v.version]),
             "lamp": "warn",
             "checks": v.checks,
             "values": { "exe": exe },
             "choices": { "exe": hist },
-            "toast": { "level": "info", "message": format!("已通过校验：rclone {}", v.version) },
+            "toast": { "level": "info", "message": i18n::f("已通过校验：rclone {}", &[&v.version]) },
             "enabled": {
                 "start": !exe.is_empty() && !form.is_null(),
                 "stop": false,
@@ -584,11 +589,11 @@ fn on_search(id: u64, rq: &Rq) -> Value {
                 s.insert("search_deep_offered".into(), json!(true));
             })],
             json!({
-                "status": "快扫没有找到 rclone.exe",
+                "status": i18n::t("快扫没有找到 rclone.exe"),
                 "lamp": "warn",
                 "toast": {
                     "level": "warn",
-                    "message": "快扫没有找到 rclone.exe，可以点「深度扫描」再找一次（较慢）"
+                    "message": i18n::t("快扫没有找到 rclone.exe，可以点「深度扫描」再找一次（较慢）")
                 },
             }),
         );
@@ -600,9 +605,9 @@ fn on_search(id: u64, rq: &Rq) -> Value {
         return done(
             id,
             json!({
-                "status": "没有找到 rclone.exe（已深度扫描）",
+                "status": i18n::t("没有找到 rclone.exe（已深度扫描）"),
                 "lamp": "err",
-                "toast": { "level": "err", "message": "没有找到 rclone.exe，请手动选择路径" },
+                "toast": { "level": "err", "message": i18n::t("没有找到 rclone.exe，请手动选择路径") },
             }),
         );
     }
@@ -647,14 +652,14 @@ fn finish_search(id: u64, form: &Value, kv: &Value, paths: &[String]) -> Value {
     let _ = form;
     let mut body = json!({
         "values": { "exe": first },
-        "status": format!("找到 {} 个候选，正在校验第一个…", paths.len()),
+        "status": i18n::f("找到 {} 个候选，正在校验第一个…", &[&paths.len()]),
         "lamp": "warn",
         "choices": { "exe": hist.clone() },
     });
     if paths.len() > 1 {
         body["toast"] = json!({
             "level": "info",
-            "message": format!("找到 {} 个 rclone.exe，已把其余 {} 个加入路径历史", paths.len(), paths.len() - 1)
+            "message": i18n::f("找到 {} 个 rclone.exe，已把其余 {} 个加入路径历史", &[&paths.len(), &(paths.len() - 1)])
         });
     }
     done_ops(
@@ -670,7 +675,7 @@ fn finish_search(id: u64, form: &Value, kv: &Value, paths: &[String]) -> Value {
 fn on_pick_history(id: u64, rq: &Rq) -> Value {
     let picked = fstr(&rq.form, "exe");
     if picked.trim().is_empty() {
-        return fail(id, "历史里没有可用的路径");
+        return fail(id, &i18n::t("历史里没有可用的路径"));
     }
     need(
         id,
@@ -715,7 +720,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         "resolve" => {
             let env = got(&rq.provided, "env");
             let Some(env) = env.as_object() else {
-                return fail(id, "宿主没有返回环境信息");
+                return fail(id, &i18n::t("宿主没有返回环境信息"));
             };
             let arch = match rclone_arch(s(env.get("arch"))) {
                 Ok(a) => a,
@@ -771,7 +776,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         // 2) 解压
         "download" => {
             if let Some(e) = got_err(&rq.provided, "dl") {
-                return fail(id, &format!("下载失败：{e}"));
+                return fail(id, &i18n::f("下载失败：{e}", &[&e]));
             }
             let tmp = state_s(&rq.state, "tmp");
             let zip = state_s(&rq.state, "zip");
@@ -790,7 +795,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         // 3) 在解压结果里找 rclone.exe
         "unzip" => {
             if let Some(e) = got_err(&rq.provided, "unz") {
-                return fail(id, &format!("解压失败：{e}"));
+                return fail(id, &i18n::f("解压失败：{e}", &[&e]));
             }
             let unpack = state_s(&rq.state, "unpack");
             let state = keep(rq.state.clone(), "step", json!("find"));
@@ -808,7 +813,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         "find" => {
             let found = s(got(&rq.provided, "find").get("path"));
             if found.is_empty() {
-                return fail(id, "压缩包里没有 rclone.exe（可能下载到了错误页面）");
+                return fail(id, &i18n::t("压缩包里没有 rclone.exe（可能下载到了错误页面）"));
             }
             let state = keep(
                 keep(rq.state.clone(), "step", json!("judge")),
@@ -828,7 +833,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                 &got(&rq.provided, "run"),
             );
             if !v.ok {
-                return fail(id, &format!("下载到的文件未通过校验：{}", v.detail));
+                return fail(id, &i18n::f("下载到的文件未通过校验：{}", &[&v.detail]));
             }
             let version = {
                 let v2 = state_s(&rq.state, "version");
@@ -866,7 +871,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
             if let Some(e) = got_err(&rq.provided, "cp") {
                 let fallback = state_s(&rq.state, "fallback");
                 if fallback.is_empty() {
-                    return fail(id, &format!("安装失败：{e}"));
+                    return fail(id, &i18n::f("安装失败：{e}", &[&e]));
                 }
                 let target = format!("{fallback}/{}", safe_dir_name(&state_s(&rq.state, "version")));
                 let exe = state_s(&rq.state, "exe");
@@ -875,7 +880,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                     "target",
                     json!(target),
                 );
-                let state = keep(state, "copy_note", json!(format!("系统目录不可写（{e}），已改为用户目录")));
+                let state = keep(state, "copy_note", json!(i18n::f("系统目录不可写（{e}），已改为用户目录", &[&e])));
                 return need(
                     id,
                     state,
@@ -890,7 +895,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         }
         "copy2" => {
             if let Some(e) = got_err(&rq.provided, "cp2") {
-                return fail(id, &format!("安装到用户目录也失败：{e}"));
+                return fail(id, &i18n::f("安装到用户目录也失败：{e}", &[&e]));
             }
             clean_and_finish(id, rq, 2)
         }
@@ -910,7 +915,7 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                 notes.push(n.to_string());
             }
             let note_text = notes.join("；");
-            let mut msg = format!("已安装 rclone {version}（{label}）");
+            let mut msg = i18n::f("已安装 rclone {version}（{label}）", &[&version, &label]);
             if !note_text.is_empty() {
                 msg.push_str("。");
                 msg.push_str(&note_text);
@@ -925,15 +930,15 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                 ops,
                 json!({
                     "values": { "exe": exe },
-                    "status": format!("已安装 rclone {version}"),
+                    "status": i18n::f("已安装 rclone {version}", &[&version]),
                     "lamp": "warn",
-                    "hints": { "install_hint": format!("安装位置：{exe}") },
+                    "hints": { "install_hint": i18n::f("安装位置：{exe}", &[&exe]) },
                     "toast": { "level": "info", "message": msg },
                     "enabled": { "start": true, "stop": false },
                 }),
             )
         }
-        other => fail(id, &format!("内部状态异常：{other}")),
+        other => fail(id, &i18n::f("内部状态异常：{other}", &[&other])),
     }
 }
 
@@ -1023,7 +1028,7 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
         // 已经试过启动：收尾
         "launch" => {
             if let Some(e) = got_err(&rq.provided, "run") {
-                let msg = format!("rclone 启动失败：{e}");
+                let msg = i18n::f("rclone 启动失败：{e}", &[&e]);
                 if auto {
                     return done(id, json!({ "lamp": "err", "status": msg }));
                 }
@@ -1054,7 +1059,7 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
                 id,
                 ops,
                 json!({
-                    "status": format!("正在运行（PID {pid}）"),
+                    "status": i18n::f("正在运行（PID {pid}）", &[&pid]),
                     "lamp": "ok",
                     // 「自动连接」勾选时，把本次启动用的地址/用户名/密码交给宿主写进设置并连接；
                     // 不勾选就完全不动设置页（用户可能连的是别的实例）。
@@ -1071,9 +1076,9 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
                     "toast": {
                         "level": "info",
                         "message": if fbool(form, "auto_connect", true) {
-                            format!("已启动 rclone（端口 {port}），正在连接…")
+                            i18n::f("已启动 rclone（端口 {port}），正在连接…", &[&port])
                         } else {
-                            format!("已启动 rclone（端口 {port}）")
+                            i18n::f("已启动 rclone（端口 {port}）", &[&port])
                         }
                     },
                     "enabled": { "start": false, "stop": true },
@@ -1096,7 +1101,7 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
             if !v.ok {
                 // 校验没过：不拉起进程，但要让用户看得见（面板 + toast）。
                 // 「静默跳过」是这个功能之前最大的坑。
-                let msg = format!("自动启动已取消：rclone 校验未通过（{}）", v.detail);
+                let msg = i18n::f("自动启动已取消：rclone 校验未通过（{}）", &[&v.detail]);
                 let ops = vec![state_op(&kv, |st| {
                     st.insert("checks".into(), checks);
                 })];
@@ -1148,7 +1153,7 @@ fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
             let kv = state.get("kv").cloned().unwrap_or(Value::Null);
             launch_decision(id, &state, form, &kv, &Value::Null, auto)
         }
-        other => fail(id, &format!("内部状态异常：{other}")),
+        other => fail(id, &i18n::f("内部状态异常：{other}", &[&other])),
     }
 }
 
@@ -1182,7 +1187,7 @@ fn launch_decision(
         return done(
             id,
             json!({
-                "status": format!("正在运行（PID {pid}）"),
+                "status": i18n::f("正在运行（PID {pid}）", &[&pid]),
                 "lamp": "ok",
                 "enabled": { "start": false, "stop": true },
             }),
@@ -1199,7 +1204,7 @@ fn launch_decision(
         return done(
             id,
             json!({
-                "status": format!("端口 {port} 上已有 rclone 在响应，已直接连接"),
+                "status": i18n::f("端口 {port} 上已有 rclone 在响应，已直接连接", &[&port]),
                 "lamp": "ok",
                 // 「自动连接」勾选时把地址与凭据交给宿主写进设置并连接
                 "rc": if fbool(form, "auto_connect", true) {
@@ -1220,14 +1225,14 @@ fn launch_decision(
         return if auto {
             done(id, json!({ "lamp": "warn" }))
         } else {
-            fail(id, "还没有设置 rclone.exe 路径")
+            fail(id, &i18n::t("还没有设置 rclone.exe 路径"))
         };
     }
     if !exe_ok {
         return if auto {
             done(id, json!({ "lamp": "warn" }))
         } else {
-            fail(id, &format!("rclone.exe 不存在：{exe}"))
+            fail(id, &i18n::f("rclone.exe 不存在：{exe}", &[&exe]))
         };
     }
     if auto && !verified_for(kv, &exe) {
@@ -1323,7 +1328,7 @@ fn on_stop(id: u64, rq: &Rq) -> Value {
             return done(
                 id,
                 json!({
-                    "status": "当前没有由本插件启动的 rclone",
+                    "status": i18n::t("当前没有由本插件启动的 rclone"),
                     "lamp": "warn",
                     "enabled": { "start": !exe.is_empty(), "stop": false },
                 }),
@@ -1350,12 +1355,12 @@ fn on_stop(id: u64, rq: &Rq) -> Value {
         ops,
         json!({
             "status": if pid > 0 {
-                format!("已停止 rclone（PID {pid}）")
+                i18n::f("已停止 rclone（PID {pid}）", &[&pid])
             } else {
-                "已停止".to_string()
+                i18n::t("已停止").to_string()
             },
             "lamp": "warn",
-            "toast": { "level": "info", "message": "已停止 rclone" },
+            "toast": { "level": "info", "message": i18n::t("已停止 rclone") },
             "enabled": { "start": !fstr(&rq.form, "exe").is_empty(), "stop": false },
         }),
     )
@@ -1368,7 +1373,7 @@ fn rclone_arch(arch: String) -> Result<String, String> {
         "x86_64" => Ok("amd64".into()),
         "x86" => Ok("386".into()),
         "aarch64" => Ok("arm64".into()),
-        other => Err(format!("不支持的 CPU 架构：{other}")),
+        other => Err(i18n::f("不支持的 CPU 架构：{other}", &[&other])),
     }
 }
 
@@ -1394,14 +1399,15 @@ fn official_bases(mirror_first: bool) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     if mirror_first {
         for (name, base) in MIRRORS {
-            out.push(((*name).to_string(), (*base).to_string()));
+            // 镜像名是给人看的，插件自己翻（表里那两条的 msgid 就是中文原名）
+            out.push((i18n::t(name), (*base).to_string()));
         }
     }
     out.push((
         if mirror_first {
-            "官方源（镜像不可用，已回退）".to_string()
+            i18n::t("官方源（镜像不可用，已回退）").to_string()
         } else {
-            "官方源".to_string()
+            i18n::t("官方源").to_string()
         },
         OFFICIAL_BASE.to_string(),
     ));
@@ -1430,7 +1436,7 @@ fn resolve_official(
     mirror_first: bool,
 ) -> Result<(String, String, String, Vec<String>), String> {
     let bases = official_bases(mirror_first);
-    let mut last = String::from("没有可用的下载源");
+    let mut last = String::from(i18n::t("没有可用的下载源"));
     for (i, (name, base)) in bases.iter().enumerate() {
         let key = format!("src{i}");
         if let Some(e) = got_err(provided, &key) {
@@ -1439,15 +1445,15 @@ fn resolve_official(
         }
         let body = s(got(provided, &key).get("body"));
         let Some(version) = parse_version_txt(&body) else {
-            last = format!("{base}/version.txt 内容无法解析");
+            last = i18n::f("{base}/version.txt 内容无法解析", &[&base]);
             continue;
         };
         let mut notes = Vec::new();
         if mirror_first {
             if i + 1 < bases.len() {
-                notes.push(format!("使用{name}"));
+                notes.push(i18n::f("使用{name}", &[&name]));
             } else {
-                notes.push(format!("镜像源不可用，已回退到官方源（{last}）"));
+                notes.push(i18n::f("镜像源不可用，已回退到官方源（{last}）", &[&last]));
             }
         }
         return Ok((
@@ -1457,7 +1463,7 @@ fn resolve_official(
             notes,
         ));
     }
-    Err(format!("无法解析 rclone 版本：{last}"))
+    Err(i18n::f("无法解析 rclone 版本：{last}", &[&last]))
 }
 
 /// 增强版：只发布在 GitHub Releases。
@@ -1466,7 +1472,7 @@ fn resolve_enhanced(
     arch: &str,
 ) -> Result<(String, String, String, Vec<String>), String> {
     if let Some(e) = got_err(provided, "src0") {
-        return Err(format!("无法查询 GitHub Releases：{e}"));
+        return Err(i18n::f("无法查询 GitHub Releases：{e}", &[&e]));
     }
     let body = got(provided, "src0").get("body").cloned().unwrap_or(Value::Null);
     let (tag, asset) = parse_github_release(&body, arch)?;
@@ -1481,7 +1487,7 @@ fn resolve_enhanced(
         url,
         tag.clone(),
         "GitHub Releases（rclone-extra）".to_string(),
-        vec!["增强版只发布在 GitHub Releases，镜像源对它不可用，已直连 GitHub".to_string()],
+        vec![i18n::t("增强版只发布在 GitHub Releases，镜像源对它不可用，已直连 GitHub").to_string()],
     ))
 }
 
@@ -1489,10 +1495,10 @@ fn parse_github_release(json: &Value, arch: &str) -> Result<(String, Option<Stri
     let tag = json
         .get("tag_name")
         .and_then(|v| v.as_str())
-        .ok_or("GitHub 返回里没有 tag_name")?
+        .ok_or(i18n::t("GitHub 返回里没有 tag_name"))?
         .to_string();
     if tag.is_empty() {
-        return Err("GitHub 返回的 tag_name 为空".into());
+        return Err(i18n::t("GitHub 返回的 tag_name 为空").into());
     }
     let want = extra_zip_name(arch).to_ascii_lowercase();
     let assets = json
@@ -1516,10 +1522,7 @@ fn parse_github_release(json: &Value, arch: &str) -> Result<(String, Option<Stri
         return Ok((tag, None));
     }
     names.truncate(8);
-    Err(format!(
-        "该版本没有 {want}（现有资产：{}）",
-        names.join("、")
-    ))
+    Err(i18n::f("该版本没有 {want}（现有资产：{}）", &[&want, &names.join("、")]))
 }
 
 /// 下载源不是官方站点时提醒一句（镜像没有义务与官方逐字节一致）。
@@ -1528,9 +1531,7 @@ fn mirror_notes(url: &str) -> Vec<String> {
     if host.is_empty() || host.contains("rclone.org") || host.contains("github.com") {
         return Vec::new();
     }
-    vec![format!(
-        "下载源不是官方站点（{host}），如需严格校验请核对官方 SHA256SUMS"
-    )]
+    vec![i18n::f("下载源不是官方站点（{host}），如需严格校验请核对官方 SHA256SUMS", &[&host])]
 }
 
 fn safe_dir_name(version: &str) -> String {
@@ -1589,7 +1590,7 @@ fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdi
     let pe_desc = {
         let d = s(pe.get("desc"));
         if d.is_empty() {
-            "未知格式".to_string()
+            i18n::t("未知格式").to_string()
         } else {
             d
         }
@@ -1605,9 +1606,9 @@ fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdi
         sig_status.eq_ignore_ascii_case("notsigned") || sig_status.is_empty()
     };
     let sig_text = if sig_status.is_empty() {
-        "未检测".to_string()
+        i18n::t("未检测").to_string()
     } else if sig_status.eq_ignore_ascii_case("valid") {
-        format!("有效（{sig_signer}）")
+        i18n::f("有效（{sig_signer}）", &[&sig_signer])
     } else {
         sig_status.clone()
     };
@@ -1626,45 +1627,45 @@ fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdi
     } else if let Some(e) = run.get("_error").and_then(|v| v.as_str()) {
         e.to_string()
     } else if !stderr.is_empty() {
-        stderr.lines().next().unwrap_or("执行失败").to_string()
+        stderr.lines().next().map(str::to_string).unwrap_or_else(|| i18n::t("执行失败"))
     } else {
-        format!("退出码 {run_code}")
+        i18n::f("退出码 {run_code}", &[&run_code])
     };
 
     let checks = vec![
         json!({
-            "label": "文件存在",
-            "value": if exists { exe.to_string() } else { "不存在".to_string() },
+            "label": i18n::t("文件存在"),
+            "value": if exists { exe.to_string() } else { i18n::t("不存在").to_string() },
             "ok": exists,
         }),
         json!({
-            "label": "文件名",
-            "value": if name_ok { "含 rclone".to_string() } else { "不含 rclone".to_string() },
+            "label": i18n::t("文件名"),
+            "value": if name_ok { i18n::t("含 rclone").to_string() } else { i18n::t("不含 rclone").to_string() },
             "ok": name_ok,
         }),
-        json!({ "label": "体积", "value": human_size(size), "ok": size_ok }),
+        json!({ "label": i18n::t("体积"), "value": human_size(size), "ok": size_ok }),
         json!({
-            "label": "程序格式",
-            "value": if pe_ok { pe_desc } else { "不是 Windows 可执行文件".to_string() },
+            "label": i18n::t("程序格式"),
+            "value": if pe_ok { pe_desc } else { i18n::t("不是 Windows 可执行文件").to_string() },
             "ok": pe_ok,
         }),
-        json!({ "label": "数字签名", "value": sig_text, "ok": sig_ok }),
-        json!({ "label": "可执行", "value": run_text, "ok": run_ok }),
+        json!({ "label": i18n::t("数字签名"), "value": sig_text, "ok": sig_ok }),
+        json!({ "label": i18n::t("可执行"), "value": run_text, "ok": run_ok }),
     ];
 
     let mut detail = String::new();
     if !exists {
-        detail = "文件不存在".into();
+        detail = i18n::t("文件不存在").into();
     } else if !size_ok {
-        detail = format!("文件大小异常（{}）", human_size(size));
+        detail = i18n::f("文件大小异常（{}）", &[&human_size(size)]);
     } else if !pe_ok {
-        detail = "不是有效的 Windows 可执行文件".into();
+        detail = i18n::t("不是有效的 Windows 可执行文件").into();
     } else if !sig_ok {
-        detail = "数字签名异常".into();
+        detail = i18n::t("数字签名异常").into();
     } else if !run_ok {
-        detail = format!("执行 `rclone version` 失败：{run_text}");
+        detail = i18n::f("执行 `rclone version` 失败：{run_text}", &[&run_text]);
     } else if !name_ok {
-        detail = "文件名不含 rclone".into();
+        detail = i18n::t("文件名不含 rclone").into();
     }
 
     Verdict {

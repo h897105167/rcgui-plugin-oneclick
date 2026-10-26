@@ -7,13 +7,27 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Windows 上 python3 可能是应用商店占位符（能启动但退出码 49，什么都不做），
+# 所以先探测真正能执行的解释器再使用；Git Bash / CI 上 python3 正常。
+PY=""
+for cand in python3 python; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    PY="$cand"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "找不到可用的 python 解释器" >&2
+  exit 1
+fi
+
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
   cargo build --release --target wasm32-wasip1
 fi
 
-cfg_id=$(python3 -c 'import json,sys;print(json.load(open("config.json"))["id"])')
-cfg_version=$(python3 -c 'import json,sys;print(json.load(open("config.json"))["version"])')
-cfg_entry=$(python3 -c 'import json,sys;print(json.load(open("config.json")).get("entry") or "main.wasm")')
+cfg_id=$("$PY" -c 'import json,sys;print(json.load(open("config.json", encoding="utf-8"))["id"])')
+cfg_version=$("$PY" -c 'import json,sys;print(json.load(open("config.json", encoding="utf-8"))["version"])')
+cfg_entry=$("$PY" -c 'import json,sys;print(json.load(open("config.json", encoding="utf-8")).get("entry") or "main.wasm")')
 
 wasm="target/wasm32-wasip1/release/$cfg_entry"
 if [ ! -f "$wasm" ]; then
@@ -41,7 +55,16 @@ cp "$wasm" "$out/$cfg_entry"
 
 zip="dist/$cfg_id-$cfg_version.zip"
 rm -f "$zip"
-( cd "$out" && zip -q -r "../$cfg_id-$cfg_version.zip" . )
+# 不依赖 zip / PowerShell：直接 python 打包（条目落在压缩包根，与 zip -r 一致）
+"$PY" - "$out" "$zip" <<'PACKEOF'
+import os, sys, zipfile
+out, zip_path = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    for root, _dirs, files in os.walk(out):
+        for f in sorted(files):
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, out))
+PACKEOF
 
 echo
 echo "打包完成：$zip"

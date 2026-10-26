@@ -1,6 +1,6 @@
 [package]
 name = "rcgui-plugin-oneclick"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "RCGUI 插件：一键安装/配置 rclone 与远程"
 license = "MIT"
