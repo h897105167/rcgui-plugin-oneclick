@@ -1,116 +1,126 @@
 # rcgui-plugin-oneclick
 
-**RCGUI 的「一键 rclone」插件** —— 搜索 / 校验 / 下载 / 安装本机 rclone，按面板上的启动参数拉起 `rclone rcd`，并可随程序自动启动、退出时停止。
+**The one-click rclone plugin for RCGUI** — find a local `rclone.exe`, verify it really is rclone, download a fresh one if there isn't any, launch it as `rclone rcd`, and hand the RC endpoint back to the host.
 
-> 本体仓库：[h897105167/rclone_gui_windows](https://github.com/h897105167/rclone_gui_windows)
-> 插件开发文档：[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-本仓库**只包含插件自己**：Rust 源码、`config.json`、打包脚本、发版 CI。
-面板不是代码，而是 `config.json` 里的 `plugin_setting` 声明 —— 本体按声明渲染，不认识「一键 rclone」这个名字。
+> Host repository: [h897105167/rclone_gui_windows](https://github.com/h897105167/rclone_gui_windows)
+> Plugin authoring guide: [docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)
 
-> 注意：本体不拥有 rclone 的进程生命周期，它不启动/停止/重启 rclone。
-> 「启动 rclone」是**这个插件**主动做的事，用的是插件自己的 `proc` 能力，与本体无关。
+This repository holds the plugin only: Rust source, `config.json`, packaging scripts, release CI. Every control you see in the panel is declared in `config.json` — the host draws the form.
 
----
+The plugin is `"builtin": true` and `"platform": "windows"`: it ships inside RCGUI's own assets and is never fetched through `plugins/manifest.json`. It is also the one plugin allowed to make assumptions about Windows, because rclone's official builds for this flow are Windows binaries.
 
-## 安装
+RCGUI never starts rclone itself. This plugin is the exception that keeps that promise honest: it declares `proc` and `net` instead of `rclone`, so it spawns `rclone rcd` as a child process and health-checks the port on its own, then tells the host "connect here". Install, start, stop, autostart-on-launch and stop-on-exit all live here.
 
-### 内置分发（推荐）
+`config.json` wires the lifecycle to panel actions: `on_start` runs `auto_start`, `on_exit` runs `stop_on_exit` — which is why quitting RCGUI takes the rclone child down with it unless you turn that off.
 
-内置分发：构建本体时 `scripts/fetch_plugins.ps1` 按 `plugins/manifest.json` 登记的版本与本仓库 [Release](https://github.com/h897105167/rcgui-plugin-oneclick/releases) 下载 zip、校验 sha256，解包到 `crates/app/assets/plugins/onerclone/`；本体启动时再释放到 `%APPDATA%\RCGUI\plugins\onerclone\`。
-升级 = 改本体 manifest 里的 `tag` 与 `sha256`（zip 的哈希）。
+## Features
 
-### 手动
+| Stage | What it does |
+| --- | --- |
+| Find | `浏览…` for a specific file, `搜索本机` for a quick sweep of the usual locations, `深度扫描` for a full drive scan — only when you ask |
+| Verify | Five pieces of evidence before a path counts as rclone: the file exists, it has a PE header, it carries a signature record, `rclone version` answers, and no earlier record contradicts it |
+| Install | `一键下载并安装` pulls the official build (or the enhanced build) for this machine's architecture and unpacks it next to the plugin's data |
+| Start | `rcd --rc-addr 127.0.0.1:<port>` plus either `--rc-no-auth` or `--rc-user` / `--rc-pass`, as a silent child process with a log file |
+| Connect | With `自动连接` on, the host is told to connect to that endpoint the moment rclone is up |
+| Keep alive | `随程序自动启动` starts rclone whenever RCGUI starts; `退出时停止 rclone` decides whether it dies with the host |
 
-1. 从 [Releases](https://github.com/h897105167/rcgui-plugin-oneclick/releases) 下载 `onerclone-<版本>.zip`；
-2. 解压到 `%APPDATA%\RCGUI\plugins\onerclone\`，目录里应有 `config.json`、`main.wasm`、`check.sha256`；
-3. 重启 RCGUI，在「插件」页看到「一键 rclone」即可。
+## Install
 
----
+- **随本体分发。** RCGUI 把 `builtin` 插件编进自己的资源，`plugins/manifest.json` 里没有它，也不会去下载它。不需要手动安装。
+- **只有 Windows 构建会被安装。** `config.json` 写着 `"platform": "windows"`，别的平台干脆不出现这个面板。
+- **卸载。** 在 RCGUI 里禁用，面板就消失；卸载会连包带设置一起删。已下载的 rclone 副本留在数据目录里 —— 这个插件不会替你删文件。
 
-## 功能
+## Panel
 
-| 分组 | 说明 |
-|---|---|
-| ① rclone 程序 | 选 `rclone.exe`、搜本机（常规 / 深度扫描）、重新校验；通过校验的路径自动记入历史（最多 10 条） |
-| ② 一键安装 | 官方版 / 增强版（teldrive 后端），官方源 / 镜像优先；下载、解压、校验、落盘，带进度 |
-| ③ 启动参数 | 用户名 / 密码 / 端口 / 本地不校验 / 静默启动 / 自动连接 |
-| ④ 启动策略 | 随程序自动启动、退出时停止 |
-| 运行 | 启动 rclone（`rcd`）、停止 |
+四个分组，从上到下就是我建议的顺序：先确定可执行文件，再装，再定参数，最后定启动策略。
 
-校验不只看文件名：会跑 `rclone version` 确认是可执行的 rclone，并解析出版本号。
+| 键 | 控件 | 标签 | 作用 |
+| --- | --- | --- | --- |
+| `conn` | status | 运行状态 | 指示灯：rclone 在不在跑、校验过没过 |
+| `g_exe` | group | ① rclone 程序 | 第一节：可执行文件 |
+| `exe` | path | 程序路径 | 手填或浏览；右侧 ▾ 是历史记录 |
+| `pick_exe` | action | 浏览… | 宿主文件对话框，只挑 `.exe` |
+| `search_exe` | action | 搜索本机 | 常见安装位置快扫 |
+| `search_deep` | action | 深度扫描 | 翻遍磁盘找 `rclone.exe` |
+| `revalidate` | action | 重新校验 | 重跑一次五项校验 |
+| `exe_history_hint` | hint | — | 说明右侧 ▾：通过校验的路径自动记入，最多 10 条 |
+| `checks` | checks | — | 校验状态；没校验过时会提醒你先校验 |
+| `g_install` | group | ② 一键安装 | 第二节：下载与安装 |
+| `edition` | select | 版本 | `官方版`（默认）或 `增强版` |
+| `source` | select | 下载源 | `官方源`（默认）或 `镜像优先` |
+| `install_edition_hint` | hint | — | 提醒增强版只在 GitHub Releases 发布 |
+| `install` | action | 一键下载并安装 | 探测架构、下载 zip、解压 |
+| `progress` | progress | — | 下载进度 |
+| `install_hint` | hint | — | 逐阶段的安装状态 |
+| `g_args` | group | ③ 启动参数 | 第三节：`rcd` 的启动参数 |
+| `rc_user` | text | 用户名 | RC 用户名，默认 `gui` |
+| `rc_pass` | password | 密码 | 可以留空：用户名非空就够启用鉴权了 |
+| `port` | number | 端口 | RC 端口，默认 `5572` |
+| `no_auth` | bool | 本地不校验 | 开启 `--rc-no-auth`，只在确实不需要鉴权时才勾 |
+| `silent` | bool | 静默启动 | 默认勾上：不给这个子进程开控制台窗口 |
+| `auto_connect` | bool | 自动连接 | 启动完成后让宿主连上这个端点 |
+| `auth_warning` | hint | — | 参数组合有问题时出现在这里 |
+| `g_boot` | group | ④ 启动策略 | 第四节：随程序起来，随程序退出 |
+| `auto_start` | bool | 随程序自动启动 | 也是 `on_start` 的动作名 |
+| `stop_on_exit` | bool | 退出时停止 rclone | 默认勾上：宿主退出时把子进程一起关掉 |
+| `auto_start_hint` | hint | — | 自动启动失败时给出提示 |
+| `d_run` | divider | — | 把状态与按钮隔开 |
+| `start` | action | 启动 rclone | 主操作：校验、拉起、连接 |
+| `stop` | action | 停止 | 停掉 rclone 并清掉运行状态 |
 
-## 设置项
+## What happens when you press Start
 
-| 控件 key | 类型 | 说明 |
-|---|---|---|
-| `conn` | status | 运行状态（带指示灯） |
-| `exe` | path | rclone 程序路径 |
-| `pick_exe` / `search_exe` / `search_deep` / `revalidate` | action | 浏览、搜索本机、深度扫描、重新校验 |
-| `edition` / `source` | select | 版本（官方版/增强版）、下载源（官方源/镜像优先） |
-| `install` | action | 一键下载并安装 |
-| `progress` | progress | 下载/解压进度 |
-| `rc_user` / `rc_pass` / `port` / `no_auth` / `silent` / `auto_connect` | 文本/密码/数字/开关 | 启动参数 |
-| `auto_start` / `stop_on_exit` | bool | 启动策略（同时也作为 `on_start` / `on_exit` 的开关） |
-| `start` / `stop` | action | 启动 / 停止 rclone |
+1. 五项校验。没通过就停在这里，并把缺口写在 `校验` 里 —— 拉起一个来历不明的 exe 比报错糟得多。
+2. 拒绝无意义的实例。没勾 `本地不校验`、用户名又空着时，插件直接拒绝启动：那样拉起的实例只会对 `core/version`、`rc/list` 之外的所有接口返回 403，对宿主毫无用处。
+3. 拼参数。`rcd --rc-addr 127.0.0.1:<端口>`，然后二选一：`--rc-no-auth`，或者 `--rc-user` 加 `--rc-pass`（密码为空就不带这个参数，rclone 会按"用户:空密码"校验）。
+4. 交给宿主。`proc.start` 起进程，带上 `silent` 与 `keep_on_exit`，日志写到数据目录下的 `logs/oneclick-rclone.log`。
+5. 等端口、再连接。端口通之前不报成功；`自动连接` 开着的话，接着让宿主连上去。
+6. 自动启动走同一条路，只是失败时不弹窗 —— 开机时没人想看一条报错，状态灯会说明一切。
 
----
+## Download sources
 
-## 开发
+- `官方源`：`downloads.rclone.org` 上的 `version.txt` 与 zip 包。
+- `镜像优先`：先试清华与南大镜像，再退回官方源；某个镜像没有对应目录时会自动跳过。
+- `增强版`：teldrive 后端的构建只出现在 `gulp79/rclone-extra` 的 GitHub Releases 里，镜像源对它无效 —— 这是 `版本` 与 `下载源` 两个下拉唯一的组合限制。
+- 架构取自宿主（`env.info`）：x64、arm64、386 各自对应 rclone 的包名，猜不出来就直接报错，不硬塞一个不匹配的二进制。
 
-需要 Rust 1.80+ 和 `wasm32-wasip1` 目标：
+## Building
 
 ```powershell
 rustup target add wasm32-wasip1
-cargo build --release --target wasm32-wasip1   # 产物 target/wasm32-wasip1/release/main.wasm
+cargo build --release --target wasm32-wasip1
+pwsh -File scripts/pack.ps1
 ```
 
-打包（生成目录包 + `check.sha256` + zip，并打印 zip 的 sha256）：
-
-```powershell
-pwsh -File scripts/pack.ps1        # Windows
-bash scripts/pack.sh               # Linux / macOS / CI
-```
-
-### 目录结构
+bash 下用 `bash scripts/pack.sh`，两个脚本等价：构建 wasm、组装 `dist/<id>-<版本>/`（`config.json`、`main.wasm`、`check.sha256`）、打成 zip 并按本插件实际使用的 `id`（`onerclone`）命名。由于它是内置插件，发版不需要改宿主的 manifest —— 重新构建 RCGUI 就会带上新版本。
 
 ```
-.
-├── Cargo.toml              # package oneclick-plugin, [[bin]] name = "main"
-├── config.json             # 插件清单 + 声明式面板（本体只读这个）
-├── src/
-│   ├── main.rs             # 入口：stdin 读一个 JSON，stdout 写一个 JSON
-│   └── ...
-├── scripts/
-│   ├── pack.ps1            # Windows 打包
-│   └── pack.sh             # CI / *nix 打包
-└── .github/workflows/
-    └── release.yml         # 打 tag → 构建 → 打包 → 发 Release
+config.json                     身份、能力、生命周期与整个面板
+src/main.rs                     插件本体，单文件
+Cargo.toml                      wasm 构建参数与依赖
+scripts/pack.ps1                构建、组装 dist/<id>-<版本>、打印 sha256
+scripts/pack.sh                 同上，给 bash 与 CI 用
+.github/workflows/release.yml   tag -> 校验版本 -> 构建 -> GitHub Release
 ```
 
-### 发版
+## Plugin protocol
 
-1. 改 `config.json` 的 `version`（必须与 tag 一致，CI 会校验）；
-2. `git tag v0.3.1 && git push origin v0.3.1`；
-3. CI 构建、打包、建 Release，资产名 `onerclone-0.3.1.zip`；
-4. 把 Release 页面上打印的 sha256 填进本体的 `plugins/manifest.json`。
+- 宿主把 `main.wasm` 当 WASI 命令跑，每轮从 stdin 读一条 JSON 请求。
+- 一轮的应答要么是结果，要么是 `{"need":[...]}`，向宿主申请能力调用；宿主答复后这一轮继续。
+- 声明能力 `kv`、`fs`、`http`、`proc`、`net`、`env` —— 没有 `ui`（面板全靠 `config.json`），也没有 `rclone`（这个插件自己和 rclone 打交道）。
+- 安装、校验、启动都是状态机：`step` 存在 `state` 里过轮次，所以下载和解压可以跨很多轮慢慢走。
+- 遇到不认识的 action 会回 `未知动作: <名字>`，而不是把这一轮弄崩。
 
----
+## Known limitations
 
-## 协议
+- 只支持 Windows：真机上的 `.exe`、签名记录、winget 之外的下载源都是 Windows 专属。
+- `深度扫描` 会遍历整块磁盘，很慢 —— 所以它只在用户点它时才跑。
+- 增强版依赖第三方仓库（`gulp79/rclone-extra`），上游不发新构建时只能装到旧版本。
+- 已下载的 rclone 副本按版本号目录存放，插件不会替你清理旧版本。
+- 数字签名检查只记录"签名存在"，不验证签发者是不是 rclone 官方。
 
-插件是一个 **WASI 命令行程序**：每次调用，本体把一段 JSON 写到 stdin，插件把一段 JSON 写到 stdout。
-需要宿主能力时，插件返回 `{"need":[{"cap":"...","params":{...}}]}`，本体执行后带着结果重新运行插件。
-完整协议、能力清单、面板 schema、命名规则、接入与分发规则见本体的
-**[docs/PLUGIN.md](https://github.com/h897105167/rclone_gui_windows/blob/main/docs/PLUGIN.md)**。
+## License
 
-本插件声明的能力：`kv`（设置与历史）、`fs`（查找/解压/写文件）、`http`（下载 rclone 压缩包）、
-`proc`（启动与探测 rclone 进程）、`net`（端口探测）、`env`（数据目录、系统信息）。
-
----
-
-## 已知限制
-
-* 目前只支持 Windows（`config.json` 的 `platform` 是 `windows`）；其他平台本体不会展示它。
-* 增强版（teldrive 后端）只发布在 GitHub Releases，镜像源对它不可用。
-* 插件负责启动 rclone，但**不接管**用户自己启动的 rclone；「停止」只停插件启动的那个进程。
+MIT — see [LICENSE](LICENSE).
