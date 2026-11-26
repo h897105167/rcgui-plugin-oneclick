@@ -1,5 +1,13 @@
 //! 一键 rclone：检测 / 安装 / 启动本机 rclone（rcd），并把连接参数交给宿主。
 //!
+//! # 本插件已弃用（0.4.0）
+//!
+//! 这套功能已经并进主程序内核：rclone 的安装、启动、停止由主程序自己负责，
+//! 插件再管一遍就是两个 rclone 抢同一个端口、退出时互相杀掉对方的进程。
+//! 源码按「保留可编译、可读」处理 —— `dispatch` 开头的弃用守门会拦下安装 /
+//! 启动 / 停止这几类动作，只回一句提示，后面的实现原封不动留着当参考。
+//! kv 里的设置与历史记录一条都没删，迁移步骤见仓库根目录的 `MIGRATION.md`。
+//!
 //! # 这个插件是什么
 //!
 //! 「内置插件」的样板。它和用户自己装的插件在磁盘上完全同构
@@ -54,6 +62,69 @@ const MAX_EXE_SIZE: u64 = 300 * 1024 * 1024;
 
 const DEFAULT_PORT: u16 = 5572;
 
+// ---------------- 弃用（0.4.0） ----------------
+
+/// 本插件已弃用：装 rclone、起 rclone、停 rclone 都已由主程序内核接管。
+///
+/// 用常量而不是把下面的实现删掉，是为了让这份源码仍然可编译、可读：
+/// 真要重新启用，把它改成 `false` 就行，不必去 git 历史里翻实现。
+const DEPRECATED: bool = true;
+
+/// 会被弃用守门拦下的动作：它们要么往磁盘上装一个 rclone，要么拉起 / 杀掉
+/// 常驻的 `rclone rcd` 进程。
+///
+/// 为什么必须拦：主程序内核自己也管一个 rclone。插件再拉起一个，就是两个 rcd
+/// 抢同一个端口；插件再停一次，就可能顺手杀掉内核正在用的那个进程。所以这几种
+/// 动作一律只回提示，把 rclone 的独占权留给内核。
+///
+/// 名单里没有的（`state` / `pick_exe` / `search_exe` / `search_deep` /
+/// `pick_history` / `revalidate`）不会留下常驻进程，最多读 kv、看文件元信息、
+/// 让 exe 自己报一次 `rclone version`。留着它们，用户才有办法确认以前的配置
+/// 还在、老路径还指得对。
+const DEPRECATED_ACTIONS: &[&str] = &[
+    "install",   // 下载 / 解压 / 落地 rclone.exe
+    "start",     // 拉起 `rclone rcd`
+    "autostart", // 旧 config.json 的 on_start 指向它，宿主启动时就会触发
+    "stop",      // 杀掉插件记录的那个 rclone 进程
+    "shutdown",  // stop 的别名
+];
+
+/// 动作 → 用户在提示里看得懂的叫法。
+///
+/// 返回的是中文原文（也就是消息 id），调用处还要再走一次 `i18n::t` 才成句。
+fn action_label(action: &str) -> &'static str {
+    match action {
+        "install" => "安装 rclone",
+        "start" => "启动 rclone",
+        "autostart" => "随程序自动启动 rclone",
+        "stop" | "shutdown" => "停止 rclone",
+        _ => "该动作",
+    }
+}
+
+/// 被拦下的动作统一回这个面板状态。
+///
+/// 走 `done` 而不是 `fail`：这是「已弃用」，不是「出错了」，所以灯用 `warn`、
+/// toast 用 warn 级。文案里必须同时说清用户该去哪儿操作，否则面板就只剩一句
+/// 死话，用户会以为插件坏了。`enabled.start` / `enabled.stop` 一起置 false，
+/// 免得按钮看起来还能点。
+fn deprecated_notice(id: u64, action: &str) -> Value {
+    let label = i18n::t(action_label(action));
+    let msg = i18n::f(
+        "「{}」已停用：安装 / 启动 / 停止 rclone 现在由主程序负责，请到主程序对应的页面操作。本插件的设置与历史记录都完整保留。",
+        &[&label],
+    );
+    done(
+        id,
+        json!({
+            "status": msg,
+            "lamp": "warn",
+            "toast": { "level": "warn", "message": msg },
+            "enabled": { "start": false, "stop": false },
+        }),
+    )
+}
+
 // ---------------- 入口 ----------------
 
 fn main() {
@@ -68,7 +139,8 @@ fn main() {
 }
 
 fn handle(input: &[u8]) -> Result<Value, String> {
-    let req: Value = serde_json::from_slice(input).map_err(|e| i18n::f("请求解析失败: {e}", &[&e]))?;
+    let req: Value =
+        serde_json::from_slice(input).map_err(|e| i18n::f("请求解析失败: {e}", &[&e]))?;
     let id = req.get("id").and_then(|v| v.as_u64()).unwrap_or(1);
     let method = s(req.get("method"));
     let params = req.get("params").cloned().unwrap_or(Value::Null);
@@ -99,6 +171,11 @@ struct Rq {
 
 fn dispatch(id: u64, p: &Value) -> Value {
     let action = s(p.get("action"));
+    // 弃用守门。放在最前面，是因为宿主可能把生命周期动作（on_start / on_exit）
+    // 和用户点击一起发过来，谁先谁后都不该让它落到真正的 proc.start / proc.stop 上。
+    if DEPRECATED && DEPRECATED_ACTIONS.contains(&action.as_str()) {
+        return deprecated_notice(id, &action);
+    }
     let rq = Rq {
         form: p.get("form").cloned().unwrap_or_else(|| json!({})),
         provided: p.get("provided").cloned().unwrap_or(Value::Null),
@@ -117,6 +194,8 @@ fn dispatch(id: u64, p: &Value) -> Value {
         "pick_history" => on_pick_history(id, &rq),
         // 重新校验当前路径
         "revalidate" => on_revalidate(id, &rq),
+        // 以下四个动作只在 DEPRECATED = false 时才走得到：弃用时已经被上面的
+        // 守门换成提示返回了。实现留在原处，是为了这份源码仍然读得出整条流程。
         // 下载 / 解压 / 校验 / 安装
         "install" => on_install(id, &rq),
         // 启动 rcd
@@ -136,7 +215,11 @@ fn s(v: Option<&Value>) -> String {
 }
 
 fn step_of(state: &Value) -> String {
-    state.get("step").and_then(|v| v.as_str()).unwrap_or("").to_string()
+    state
+        .get("step")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 取本轮 `provided` 里的某个键；没有就是 Null。
@@ -282,7 +365,11 @@ fn on_state(id: u64, rq: &Rq) -> Value {
             // 不再渲染路径下拉 —— 表现正是「rclone 在跑时历史不见了」。
             return need(
                 id,
-                keep(keep(json!({ "step": "proc" }), "meta", meta.clone()), "kv", kv),
+                keep(
+                    keep(json!({ "step": "proc" }), "meta", meta.clone()),
+                    "kv",
+                    kv,
+                ),
                 vec![json!({
                     "cap": "proc.status",
                     "key": "proc",
@@ -301,16 +388,28 @@ fn on_state(id: u64, rq: &Rq) -> Value {
 /// 合成面板状态：一行文字 + 一盏灯 + 校验清单 + 按钮可用性。
 fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
     let exe = fstr(form, "exe");
-    let running = proc.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+    let running = proc
+        .get("running")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let pid = proc.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
     let uptime = proc.get("uptime_ms").and_then(|v| v.as_i64()).unwrap_or(0);
     let checks = kv_state(kv).get("checks").cloned().unwrap_or(Value::Null);
-    let exe_ok = meta.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)
-        && meta.get("is_file").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exe_ok = meta
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && meta
+            .get("is_file")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
     let (status, lamp) = if running {
         (
-            i18n::f("正在运行（PID {pid} · 已运行 {}）", &[&pid, &fmt_uptime(uptime)]),
+            i18n::f(
+                "正在运行（PID {pid} · 已运行 {}）",
+                &[&pid, &fmt_uptime(uptime)],
+            ),
             "ok",
         )
     } else if exe.is_empty() {
@@ -340,7 +439,9 @@ fn state_body(form: &Value, kv: &Value, meta: &Value, proc: &Value) -> Value {
     if !exe.is_empty() && !verified_for(kv, &exe) {
         hints.insert(
             "auto_start_hint".into(),
-            json!(i18n::t("首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起")),
+            json!(i18n::t(
+                "首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起"
+            )),
         );
     }
 
@@ -686,6 +787,10 @@ fn on_pick_history(id: u64, rq: &Rq) -> Value {
 
 // ---------------- install：下载 / 解压 / 校验 / 安装 ----------------
 
+/// 下载 / 解压 / 校验 / 就地安装 rclone.exe，最后落一条 kv 记录。
+///
+/// 弃用后走不到这里：`install` 已在 `DEPRECATED_ACTIONS` 里被守门拦下。
+/// 实现留着，是因为主程序内核复用的就是这套流程（见 MIGRATION.md 第 3 节）。
 fn on_install(id: u64, rq: &Rq) -> Value {
     let st = step_of(&rq.state);
     let form = &rq.form;
@@ -781,7 +886,11 @@ fn on_install(id: u64, rq: &Rq) -> Value {
             let tmp = state_s(&rq.state, "tmp");
             let zip = state_s(&rq.state, "zip");
             let unpack = format!("{tmp}/unpack");
-            let state = keep(keep(rq.state.clone(), "step", json!("unzip")), "unpack", json!(unpack));
+            let state = keep(
+                keep(rq.state.clone(), "step", json!("unzip")),
+                "unpack",
+                json!(unpack),
+            );
             need(
                 id,
                 state,
@@ -813,7 +922,10 @@ fn on_install(id: u64, rq: &Rq) -> Value {
         "find" => {
             let found = s(got(&rq.provided, "find").get("path"));
             if found.is_empty() {
-                return fail(id, &i18n::t("压缩包里没有 rclone.exe（可能下载到了错误页面）"));
+                return fail(
+                    id,
+                    &i18n::t("压缩包里没有 rclone.exe（可能下载到了错误页面）"),
+                );
             }
             let state = keep(
                 keep(rq.state.clone(), "step", json!("judge")),
@@ -873,14 +985,21 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                 if fallback.is_empty() {
                     return fail(id, &i18n::f("安装失败：{e}", &[&e]));
                 }
-                let target = format!("{fallback}/{}", safe_dir_name(&state_s(&rq.state, "version")));
+                let target = format!(
+                    "{fallback}/{}",
+                    safe_dir_name(&state_s(&rq.state, "version"))
+                );
                 let exe = state_s(&rq.state, "exe");
                 let state = keep(
                     keep(rq.state.clone(), "step", json!("copy2")),
                     "target",
                     json!(target),
                 );
-                let state = keep(state, "copy_note", json!(i18n::f("系统目录不可写（{e}），已改为用户目录", &[&e])));
+                let state = keep(
+                    state,
+                    "copy_note",
+                    json!(i18n::f("系统目录不可写（{e}），已改为用户目录", &[&e])),
+                );
                 return need(
                     id,
                     state,
@@ -909,7 +1028,12 @@ fn on_install(id: u64, rq: &Rq) -> Value {
                 .state
                 .get("label_notes")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str()).map(String::from).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
             if let Some(n) = rq.state.get("copy_note").and_then(|v| v.as_str()) {
                 notes.push(n.to_string());
@@ -956,7 +1080,10 @@ fn clean_and_finish(id: u64, rq: &Rq, which: u8) -> Value {
 
 /// 安装根目录：提权装进 Program Files，否则装到用户目录。
 fn install_roots(state: &Value) -> (String, String) {
-    let elevated = state.get("elevated").and_then(|v| v.as_bool()).unwrap_or(false);
+    let elevated = state
+        .get("elevated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let local = state_s(state, "localappdata");
     let pf = state_s(state, "programfiles");
     let user = if local.is_empty() {
@@ -973,6 +1100,10 @@ fn install_roots(state: &Value) -> (String, String) {
 
 // ---------------- start / stop ----------------
 
+/// 拉起 `rclone rcd`，成功后把 RC 端点和账号交给宿主。
+///
+/// `auto` 区分「宿主启动时的生命周期调用」和「用户点启动」：前者失败要静默，
+/// 后者要给提示。弃用后走不到这里：`start` / `autostart` 已被守门拦下。
 fn on_start(id: u64, rq: &Rq, auto: bool) -> Value {
     let st = step_of(&rq.state);
     let form = &rq.form;
@@ -1173,14 +1304,20 @@ fn launch_decision(
 ) -> Value {
     let exe = fstr(form, "exe");
     let port = fport(form);
-    let running = proc.get("running").and_then(|v| v.as_bool()).unwrap_or(false);
+    let running = proc
+        .get("running")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let port_open = state
         .get("port_open")
         .and_then(|v| v.get("open"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let meta = state.get("meta").cloned().unwrap_or(Value::Null);
-    let exe_ok = meta.get("exists").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exe_ok = meta
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if running {
         let pid = proc.get("pid").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1245,7 +1382,11 @@ fn launch_decision(
         // 由后续 `read2` 轮把结论带在 state 里继续走启动流程。
         return need(
             id,
-            keep(keep(state.clone(), "step", json!("verify")), "exe", json!(exe)),
+            keep(
+                keep(state.clone(), "step", json!("verify")),
+                "exe",
+                json!(exe),
+            ),
             verify_needs(&exe),
         );
     }
@@ -1257,7 +1398,8 @@ fn launch_decision(
     // mount/mount、serve/start 全部 403，在宿主侧表现为「握手成功，但 5 项自动恢复
     // 全失败」。这种进程对宿主毫无用处，早失败 + 说清原因，比留下一个僵尸实例好。
     if !fbool(form, "no_auth", false) && fstr(form, "rc_user").is_empty() {
-        let msg = "未填写 RC 用户名：这样启动的 rclone 会拒绝挂载 / 服务 / 参数读取等所有接口（403）。\
+        let msg =
+            "未填写 RC 用户名：这样启动的 rclone 会拒绝挂载 / 服务 / 参数读取等所有接口（403）。\
                    请填用户名（密码可留空），或勾选「本地不校验（--rc-no-auth）」。";
         return if auto {
             done(id, json!({ "status": msg, "lamp": "warn" }))
@@ -1311,6 +1453,11 @@ fn launch_decision(
     )
 }
 
+/// 停掉 kv 里记着的那个 rclone 进程（`_state.proc.handle`），并清掉这条记录。
+///
+/// 弃用后走不到这里：`stop` / `shutdown` 已被守门拦下。注意它只杀自己启动过
+/// 的进程 —— 认不出句柄时什么也不做，这也是当年没有误杀主程序内核的原因，
+/// 但「由谁来管」只能有一个，所以现在统一交给内核。
 fn on_stop(id: u64, rq: &Rq) -> Value {
     let st = step_of(&rq.state);
     if st.is_empty() {
@@ -1336,7 +1483,11 @@ fn on_stop(id: u64, rq: &Rq) -> Value {
         }
         return need(
             id,
-            keep(keep(json!({ "step": "stop" }), "kv", kv.clone()), "auto", json!(false)),
+            keep(
+                keep(json!({ "step": "stop" }), "kv", kv.clone()),
+                "auto",
+                json!(false),
+            ),
             vec![json!({
                 "cap": "proc.stop",
                 "key": "stop",
@@ -1474,7 +1625,10 @@ fn resolve_enhanced(
     if let Some(e) = got_err(provided, "src0") {
         return Err(i18n::f("无法查询 GitHub Releases：{e}", &[&e]));
     }
-    let body = got(provided, "src0").get("body").cloned().unwrap_or(Value::Null);
+    let body = got(provided, "src0")
+        .get("body")
+        .cloned()
+        .unwrap_or(Value::Null);
     let (tag, asset) = parse_github_release(&body, arch)?;
     let url = match asset {
         Some(u) => u,
@@ -1487,7 +1641,9 @@ fn resolve_enhanced(
         url,
         tag.clone(),
         "GitHub Releases（rclone-extra）".to_string(),
-        vec![i18n::t("增强版只发布在 GitHub Releases，镜像源对它不可用，已直连 GitHub").to_string()],
+        vec![
+            i18n::t("增强版只发布在 GitHub Releases，镜像源对它不可用，已直连 GitHub").to_string(),
+        ],
     ))
 }
 
@@ -1522,7 +1678,10 @@ fn parse_github_release(json: &Value, arch: &str) -> Result<(String, Option<Stri
         return Ok((tag, None));
     }
     names.truncate(8);
-    Err(i18n::f("该版本没有 {want}（现有资产：{}）", &[&want, &names.join("、")]))
+    Err(i18n::f(
+        "该版本没有 {want}（现有资产：{}）",
+        &[&want, &names.join("、")],
+    ))
 }
 
 /// 下载源不是官方站点时提醒一句（镜像没有义务与官方逐字节一致）。
@@ -1531,7 +1690,10 @@ fn mirror_notes(url: &str) -> Vec<String> {
     if host.is_empty() || host.contains("rclone.org") || host.contains("github.com") {
         return Vec::new();
     }
-    vec![i18n::f("下载源不是官方站点（{host}），如需严格校验请核对官方 SHA256SUMS", &[&host])]
+    vec![i18n::f(
+        "下载源不是官方站点（{host}），如需严格校验请核对官方 SHA256SUMS",
+        &[&host],
+    )]
 }
 
 fn safe_dir_name(version: &str) -> String {
@@ -1577,8 +1739,14 @@ fn human_size(n: u64) -> String {
 /// 数字签名 → `<exe> version` 输出的硬证据。**最后一步才是硬证据**，
 /// 前面的检查只是为了让界面能尽早给出可读的失败原因。
 fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdict {
-    let exists = meta.get("exists").and_then(|v| v.as_bool()).unwrap_or(false)
-        && meta.get("is_file").and_then(|v| v.as_bool()).unwrap_or(false);
+    let exists = meta
+        .get("exists")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && meta
+            .get("is_file")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     let size = meta.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
     let name_ok = exe
         .rsplit(['/', '\\'])
@@ -1618,7 +1786,11 @@ fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdi
     let stderr = s(run.get("stderr"));
     let version = stdout
         .lines()
-        .find_map(|l| l.trim().strip_prefix("rclone ").map(|v| v.trim().to_string()))
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("rclone ")
+                .map(|v| v.trim().to_string())
+        })
         .filter(|v| v.starts_with('v'))
         .unwrap_or_default();
     let run_ok = run_code == 0 && !version.is_empty();
@@ -1627,7 +1799,11 @@ fn judge(exe: &str, meta: &Value, pe: &Value, sig: &Value, run: &Value) -> Verdi
     } else if let Some(e) = run.get("_error").and_then(|v| v.as_str()) {
         e.to_string()
     } else if !stderr.is_empty() {
-        stderr.lines().next().map(str::to_string).unwrap_or_else(|| i18n::t("执行失败"))
+        stderr
+            .lines()
+            .next()
+            .map(str::to_string)
+            .unwrap_or_else(|| i18n::t("执行失败"))
     } else {
         i18n::f("退出码 {run_code}", &[&run_code])
     };

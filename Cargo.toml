@@ -1,8 +1,8 @@
 [package]
 name = "rcgui-plugin-oneclick"
-version = "0.3.3"
+version = "0.4.1"
 edition = "2021"
-description = "RCGUI 插件：一键安装/配置 rclone 与远程"
+description = "RCGUI 插件：一键安装/配置 rclone 与远程（已弃用，功能已并入主程序）"
 license = "MIT"
 repository = "https://github.com/h897105167/rcgui-plugin-oneclick"
 

@@ -85,5 +85,11 @@
  "退出码 {run_code}": "Exit code {run_code}",
  "选择 rclone.exe": "Choose rclone.exe",
  "镜像源不可用，已回退到官方源（{last}）": "Mirrors unavailable, fell back to the official source ({last})",
- "首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起": "The first auto-start verifies rclone.exe once (a few seconds) and then launches it"
+ "首次自动启动会先校验一次 rclone.exe（约几秒），通过后照常拉起": "The first auto-start verifies rclone.exe once (a few seconds) and then launches it",
+ "「{}」已停用：安装 / 启动 / 停止 rclone 现在由主程序负责，请到主程序对应的页面操作。本插件的设置与历史记录都完整保留。": "{} is disabled: installing, starting and stopping rclone is the app's job now. Use the matching page in the app. This plugin's settings and history are kept.",
+ "停止 rclone": "Stop rclone",
+ "安装 rclone": "Install rclone",
+ "启动 rclone": "Start rclone",
+ "随程序自动启动 rclone": "Start rclone with the app",
+ "该动作": "This action"
 }
