@@ -1,0 +1,126 @@
+name: ci
+
+# 每次 push / pull_request 都跑一遍：格式、类型检查、单元测试、config.json 自检、打包校验。
+#
+# 为什么弃用了还要 CI：源码留在这里当参考实现（MIGRATION.md 第 3 节就是照着它
+# 写的），谁改一行都得能证明它还编得过、注释里的说法没和代码走散。CI 只验证，
+# 不发布 —— 发布那条路在 release.yml，只手动触发。
+#
+# 测试数量为 0 也算通过：cargo test 的退出码只看有没有失败。当前有 5 个
+# （src/i18n.rs 里的翻译表自检），新增翻译条目如果中英占位符对不上会在这里红。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --locked 是故意的：Cargo.lock 也提交在仓库里，依赖漂了要先看到红。
+      - name: 格式检查
+        run: cargo fmt --check
+
+      - name: 单元测试
+        run: cargo test --locked
+
+      # 这一关和打包用的是同一个 target，编译不过的话构建出来的 wasm 也用不了。
+      - name: 类型检查（WASI 目标）
+        run: cargo check --locked --target wasm32-wasip1
+
+      # 弃用后 config.json 反而更要守住：宿主仍会读它来显示这个插件的面板，
+      # 但 on_start/on_exit 必须为空，否则一启用就会和主程序内核抢进程。
+      - name: 校验 config.json
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys, tomllib
+
+          cfg = json.load(open("config.json", encoding="utf-8"))
+          ps = cfg["plugin_setting"]
+          errors = []
+
+          for field in ("on_start", "on_exit"):
+              if ps.get(field):
+                  errors.append(f"弃用插件的 {field} 必须为空，现在是 {ps[field]!r}")
+
+          if cfg.get("builtin") is not True:
+              errors.append("内置插件应保持 builtin: true，迁移前老配置仍按内置插件加载")
+
+          keys = [c["key"] for c in ps["controls"]]
+          dup = sorted({k for k in keys if keys.count(k) > 1})
+          if dup:
+              errors.append(f"控件 key 重复: {dup}")
+
+          for c in ps["controls"]:
+              if c.get("field") == "select" and "options" not in c and not c.get("dynamic"):
+                  errors.append(f"{c['key']}: select 既无 options 也没声明 dynamic")
+              if c.get("kind") == "action" and not c.get("label"):
+                  errors.append(f"{c['key']}: action 缺少 label")
+
+          cargo_ver = tomllib.load(open("Cargo.toml", "rb"))["package"]["version"]
+          if cargo_ver != cfg["version"]:
+              errors.append(f"Cargo.toml {cargo_ver} != config.json {cfg['version']}")
+
+          print(f"controls={len(ps['controls'])} version={cfg['version']}")
+          for e in errors:
+              print("error: " + e, file=sys.stderr)
+          sys.exit(1 if errors else 0)
+          PY
+
+      # 打包这一步证明的是"能发得出去"：config.json、wasm、check.sha256 三件齐、
+      # 清单里的哈希和包里文件对得上。只编过 wasm 不代表能装。
+      - name: 打包 WASI 包并校验
+        run: |
+          set -euo pipefail
+          bash scripts/pack.sh
+          python3 - <<'PY'
+          import hashlib, json, pathlib, sys, tomllib, zipfile
+
+          cfg = json.load(open("config.json", encoding="utf-8"))
+          pid, version = cfg["id"], cfg["version"]
+          entry = cfg.get("entry") or "main.wasm"
+          zip_path = pathlib.Path(f"dist/{pid}-{version}.zip")
+          errors = []
+
+          if not zip_path.exists():
+              sys.exit(f"没有产物 {zip_path}")
+
+          with zipfile.ZipFile(zip_path) as z:
+              names = sorted(z.namelist())
+              if names != ["check.sha256", "config.json", entry]:
+                  errors.append(f"包内条目不对: {names}")
+              blobs = {n: z.read(n) for n in names}
+
+          # check.sha256 是宿主安装时真正核对的东西，行格式 "<sha256>  <file>"。
+          for line in blobs["check.sha256"].decode().splitlines():
+              want, name = line.split("  ", 1)
+              got = hashlib.sha256(blobs.get(name, b"")).hexdigest()
+              if got != want:
+                  errors.append(f"{name}: 清单 {want} != 实际 {got}")
+
+          if json.loads(blobs["config.json"])["version"] != version:
+              errors.append("包内 config.json 版本和包名不一致")
+
+          cargo_ver = tomllib.load(open("Cargo.toml", "rb"))["package"]["version"]
+          if cargo_ver != version:
+              errors.append(f"Cargo.toml {cargo_ver} != config.json {version}")
+
+          print(f"包={zip_path} 条目={len(names)} 版本={version}")
+          for e in errors:
+              print("error: " + e, file=sys.stderr)
+          sys.exit(1 if errors else 0)
+          PY

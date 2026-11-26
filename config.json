@@ -1,11 +1,11 @@
 {
   "id": "onerclone",
   "name": { "zh": "一键 rclone", "en": "One-click rclone" },
-  "version": "0.3.3",
+  "version": "0.4.1",
   "entry": "main.wasm",
   "description": {
-    "zh": "搜索 / 检测 / 安装 / 启动本机 rclone（rcd），并按启动参数自动连接",
-    "en": "Search / check / install / start the local rclone (rcd) and connect automatically from the launch arguments"
+    "zh": "已弃用，功能已并入主程序：搜索 / 检测 / 安装 / 启动本机 rclone（rcd），并按启动参数自动连接",
+    "en": "Deprecated — built into the app: search / check / install / start the local rclone (rcd) and connect automatically from the launch arguments"
   },
   "author": { "zh": "内置", "en": "Built-in" },
   "tags": {
@@ -13,16 +13,16 @@
     "en": ["rclone", "process", "install", "download", "rcd", "search"]
   },
   "capabilities": ["kv", "fs", "http", "proc", "net", "env"],
+  "min_gui_version": "0.3.0",
   "platform": "windows",
   "builtin": true,
   "plugin_setting": {
     "version": 2,
+    "pages": [{ "id": "settings", "label": { "zh": "设置", "en": "Settings" } }],
     "summary": {
-      "zh": "搜索 / 检测 / 安装 / 启动本机 rclone",
-      "en": "Search / check / install / start the local rclone"
+      "zh": "已弃用，功能已并入主程序：搜索 / 检测 / 安装 / 启动本机 rclone",
+      "en": "Deprecated — built into the app: search / check / install / start the local rclone"
     },
-    "on_start": "auto_start",
-    "on_exit": "stop_on_exit",
     "controls": [
       {
         "kind": "status",
@@ -30,9 +30,9 @@
         "label": { "zh": "运行状态", "en": "Run state" },
         "lamp": true
       },
-      { "kind": "group", "key": "g_exe", "label": { "zh": "① rclone 程序", "en": "① rclone binary" } },
+      { "kind": "group", "page": "settings", "key": "g_exe", "label": { "zh": "① rclone 程序", "en": "① rclone binary" } },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "exe",
         "label": { "zh": "程序路径", "en": "Program path" },
         "field": "path",
@@ -44,31 +44,31 @@
         "filters": ["exe"]
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "pick_exe",
         "label": { "zh": "浏览…", "en": "Browse…" },
         "line": "exe-actions"
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "search_exe",
         "label": { "zh": "搜索本机", "en": "Search this PC" },
         "line": "exe-actions"
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "search_deep",
         "label": { "zh": "深度扫描", "en": "Deep scan" },
         "line": "exe-actions"
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "revalidate",
         "label": { "zh": "重新校验", "en": "Re-check" },
         "line": "exe-actions"
       },
       {
-        "kind": "hint",
+        "kind": "hint", "page": "settings",
         "key": "exe_history_hint",
         "text": {
           "zh": "程序路径右侧的 ▾ 是历史记录：通过校验的路径会自动记入（最多 10 条）。",
@@ -84,9 +84,9 @@
         }
       },
 
-      { "kind": "group", "key": "g_install", "label": { "zh": "② 一键安装", "en": "② One-click install" } },
+      { "kind": "group", "page": "settings", "key": "g_install", "label": { "zh": "② 一键安装", "en": "② One-click install" } },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "edition",
         "label": { "zh": "版本", "en": "Edition" },
         "field": "select",
@@ -97,7 +97,7 @@
         "default": "官方版"
       },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "source",
         "label": { "zh": "下载源", "en": "Download source" },
         "field": "select",
@@ -108,7 +108,7 @@
         "default": "官方源"
       },
       {
-        "kind": "hint",
+        "kind": "hint", "page": "settings",
         "key": "install_edition_hint",
         "text": {
           "zh": "增强版（teldrive 后端）只发布在 GitHub Releases，镜像源对它不可用。",
@@ -116,24 +116,24 @@
         }
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "install",
-        "label": { "zh": "一键下载并安装", "en": "Download and install" },
+        "label": { "zh": "一键下载并安装（已弃用）", "en": "Download and install (deprecated)" },
         "style": "primary"
       },
       { "kind": "progress", "key": "progress" },
-      { "kind": "hint", "key": "install_hint", "text": "" },
+      { "kind": "hint", "page": "settings", "key": "install_hint", "text": "" },
 
-      { "kind": "group", "key": "g_args", "label": { "zh": "③ 启动参数", "en": "③ Launch arguments" } },
+      { "kind": "group", "page": "settings", "key": "g_args", "label": { "zh": "③ 启动参数", "en": "③ Launch arguments" } },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "rc_user",
         "label": { "zh": "用户名", "en": "User name" },
         "field": "text",
         "default": "gui"
       },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "rc_pass",
         "label": { "zh": "密码", "en": "Password" },
         "field": "password",
@@ -142,59 +142,59 @@
           "en": "May be empty: rclone enables auth as soon as the user name is set (an empty password means Basic user:empty)"
         }
       },
-      { "kind": "field", "key": "port", "label": { "zh": "端口", "en": "Port" }, "field": "number", "default": "5572" },
+      { "kind": "field", "page": "settings", "key": "port", "label": { "zh": "端口", "en": "Port" }, "field": "number", "default": "5572" },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "no_auth",
         "label": { "zh": "本地不校验", "en": "No auth locally" },
         "field": "bool",
         "default": "false"
       },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "silent",
         "label": { "zh": "静默启动", "en": "Start silently" },
         "field": "bool",
         "default": "true"
       },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "auto_connect",
         "label": { "zh": "自动连接", "en": "Connect automatically" },
         "field": "bool",
         "default": "true"
       },
-      { "kind": "hint", "key": "auth_warning", "text": "" },
+      { "kind": "hint", "page": "settings", "key": "auth_warning", "text": "" },
 
-      { "kind": "group", "key": "g_boot", "label": { "zh": "④ 启动策略", "en": "④ Start policy" } },
+      { "kind": "group", "page": "settings", "key": "g_boot", "label": { "zh": "④ 启动策略", "en": "④ Start policy" } },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "auto_start",
         "label": { "zh": "随程序自动启动", "en": "Start with the app" },
         "field": "bool",
         "default": "false"
       },
       {
-        "kind": "field",
+        "kind": "field", "page": "settings",
         "key": "stop_on_exit",
         "label": { "zh": "退出时停止 rclone", "en": "Stop rclone on exit" },
         "field": "bool",
         "default": "true"
       },
-      { "kind": "hint", "key": "auto_start_hint", "text": "" },
+      { "kind": "hint", "page": "settings", "key": "auto_start_hint", "text": "" },
 
-      { "kind": "divider", "key": "d_run" },
+      { "kind": "divider", "page": "settings", "key": "d_run" },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "start",
-        "label": { "zh": "启动 rclone", "en": "Start rclone" },
+        "label": { "zh": "启动 rclone（已弃用）", "en": "Start rclone (deprecated)" },
         "style": "primary",
         "line": "run-actions"
       },
       {
-        "kind": "action",
+        "kind": "action", "page": "settings",
         "key": "stop",
-        "label": { "zh": "停止", "en": "Stop" },
+        "label": { "zh": "停止（已弃用）", "en": "Stop (deprecated)" },
         "style": "danger",
         "line": "run-actions"
       }

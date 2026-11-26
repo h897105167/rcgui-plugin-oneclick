@@ -260,12 +260,18 @@ mod tests {
         with_lang("zh-Hans", || {
             let out = f(&positional, &refs);
             for a in &args {
-                assert!(out.contains(a.as_str()), "{positional} 没把 {a} 填进去：{out}");
+                assert!(
+                    out.contains(a.as_str()),
+                    "{positional} 没把 {a} 填进去：{out}"
+                );
             }
         });
 
         // 命名占位：参数按出现顺序传
-        if let Some(named) = keys.iter().find(|k| k.contains("{e}") || k.contains("{exe}")) {
+        if let Some(named) = keys
+            .iter()
+            .find(|k| k.contains("{e}") || k.contains("{exe}"))
+        {
             let count = named.matches('{').count();
             let values: Vec<String> = (0..count).map(|i| format!("NAMED{i}")).collect();
             let refs: Vec<&dyn fmt::Display> =

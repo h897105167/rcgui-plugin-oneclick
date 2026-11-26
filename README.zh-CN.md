@@ -1,6 +1,9 @@
 # rcgui-plugin-oneclick
 
-**RCGUI 的一键 rclone 插件** —— 找到本机的 `rclone.exe`、确认它真的是 rclone、没有就下一个、以 `rclone rcd` 拉起来，再把 RC 端点交回宿主。
+> **已弃用（0.4.1）：功能已并入主程序。** 安装 / 启动 / 停止 rclone 现在由 RCGUI 内核负责；本插件不再启动、停止或安装任何 rclone 进程，也不再发布新版本。
+> 要把旧插件的设置与历史记录搬到主程序：见 [MIGRATION.md](MIGRATION.md)。源码保留下来作参考实现 —— `config.json` 已不再声明 `on_start` / `on_exit`，面板上的安装 / 启动 / 停止只会回一句弃用提示，kv 里的数据一条没删。
+
+**RCGUI 的一键 rclone 插件** —— 它曾经负责找到本机的 `rclone.exe`、确认它真的是 rclone、没有就下一个、以 `rclone rcd` 拉起来，再把 RC 端点交回宿主。从 0.4.1 起这些都由主程序内核做，本仓库只作为那段实现的参考。
 
 [English](README.md) | 简体中文
 
@@ -11,11 +14,13 @@
 
 这个插件是 `"builtin": true`、`"platform": "windows"`：它随 RCGUI 的资源一起分发，从不经过 `plugins/manifest.json` 下载。它也是唯一被允许对 Windows 作假设的插件，因为这条流程里 rclone 的官方构建就是 Windows 二进制。
 
-RCGUI 自己从不启动 rclone。这个插件让那句承诺依然成立：它声明的是 `proc` 与 `net`，不是 `rclone` —— 由它把 `rclone rcd` 当子进程拉起来、自己探端口，然后告诉宿主"连这里"。安装、启动、停止、随程序启动、退出时停止，全都住在这里。
+RCGUI 自己从不启动 rclone。这个插件让那句承诺依然成立：它声明的是 `proc` 与 `net`，不是 `rclone` —— 由它把 `rclone rcd` 当子进程拉起来、自己探端口，然后告诉宿主"连这里"。安装、启动、停止、随程序启动、退出时停止，在 0.4.1 之前全都住在这里；现在这套流程搬进了内核，代码留在这个仓库里当参考。
 
-`config.json` 把生命周期挂在面板动作上：`on_start` 跑 `auto_start`，`on_exit` 跑 `stop_on_exit` —— 所以退出 RCGUI 会带走那个 rclone 子进程，除非你把这一项关掉。
+0.4.1 之前，`config.json` 把生命周期挂在面板动作上（`on_start` 跑 `auto_start`，`on_exit` 跑 `stop_on_exit`），退出 RCGUI 会带走那个 rclone 子进程。这两个钩子已经删掉：生命周期归主程序内核管，插件再管一遍就是两个 rclone 抢同一个端口、退出时互杀对方的进程。
 
-## 功能
+## 它以前做什么（0.4.1 之前）
+
+下面这些现在都不跑了 —— 列出来是为了让迁移说明和源码读得通。每个环节现在都由主程序内核自己完成。
 
 | 环节 | 做什么 |
 | --- | --- |
@@ -34,7 +39,9 @@ RCGUI 自己从不启动 rclone。这个插件让那句承诺依然成立：它�
 
 ## 面板
 
-四个分组，从上到下就是我建议的顺序：先确定可执行文件，再装，再定参数，最后定启动策略。
+四个分组，从上到下是原来那条流程的顺序：先确定可执行文件，再装，再定参数，最后定启动策略。现在还干活的只有读取类动作 —— `state`、浏览、搜索、重新检查、历史记录；下载安装、启动、自动启动、停止都只回一句弃用提示，不碰任何进程。
+
+四组都在同一个页里（页 id `settings`，标签「设置」），所以会画页签的宿主把它显示成一个分组。运行状态行不归页管：宿主整个插件只有一条状态行。宿主低于 0.3.0 时忽略页字段，所有控件平铺在一页。
 
 下表「标签」列写的是中文原文；每个标签在 `config.json` 里都另存一份英文，界面语言是英文时宿主显示那一份（见 [多语言](#多语言)）。
 
@@ -108,15 +115,20 @@ pwsh -File scripts/pack.ps1
 bash 下用 `bash scripts/pack.sh`，两个脚本等价：构建 wasm、组装 `dist/<id>-<版本>/`（`config.json`、`main.wasm`、`check.sha256`）、打成 zip 并按本插件实际使用的 `id`（`onerclone`）命名。由于它是内置插件，发版不需要改宿主的 manifest —— 重新构建 RCGUI 就会带上新版本。
 
 ```
-config.json                     身份、能力、生命周期与整个面板
+config.json                     身份、能力与整个面板（0.4.1 起不再有生命周期钩子）
 src/main.rs                     插件本体，单文件
 src/i18n.rs                     语言标记处理与消息格式化
 src/i18n.json                   中文消息 id -> 英文译文
 Cargo.toml                      wasm 构建参数与依赖
 scripts/pack.ps1                构建、组装 dist/<id>-<版本>、打印 sha256
 scripts/pack.sh                 同上，给 bash 与 CI 用
-.github/workflows/release.yml   tag -> 校验版本 -> 构建 -> GitHub Release
+.github/workflows/release.yml   手动 workflow_dispatch -> 构建 -> 打包上传（不再发 Release）
+.github/workflows/ci.yml        每次 push / PR：fmt --check、test、check(wasm32-wasip1)
+MIGRATION.md                    旧插件 kv 数据与主程序内核的迁移说明
+CHANGELOG.md                    版本变更记录
 ```
+
+想重新打包时：到仓库的 Actions 页面手动跑一次 `release` 工作流。它只产出一个 artifact，不碰 Release，也不会自动挂到本体仓库的插件包上。
 
 ## 插件协议
 

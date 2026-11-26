@@ -1,36 +1,66 @@
 name: release
 
-# 打 tag（vX.Y.Z）→ 构建 wasm → 打包目录包 → 建 Release 并挂上 zip
-# 本体的 scripts/fetch_plugins.ps1 就是从这个 Release 拉包的。
+# 本插件已弃用，功能并进主程序内核，不再随 tag 自动发布。
+# 只保留手动 workflow_dispatch：构建 dist/*.zip 作为构建产物（artifact），
+# 不建 Release。想重新发版先想清楚内核里那份还管不管 rclone —— 两份同时管会抢进程。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          components: rustfmt
           targets: wasm32-wasip1
 
-      - name: 校验 tag 与 config.json 版本
-        if: startsWith(github.ref, 'refs/tags/')
+      - uses: Swatinem/rust-cache@v2
+
+      # 版本号有三份副本（config.json、Cargo.toml、Cargo.lock）；对不上就别打包。
+      - name: 校验版本一致
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#v}"
-          ver=$(python3 -c 'import json;print(json.load(open("config.json"))["version"])')
-          echo "tag=$tag version=$ver"
-          if [ "$tag" != "$ver" ]; then
-            echo "tag 与 config.json 的 version 不一致：请先改 config.json 再打 tag" >&2
-            exit 1
-          fi
+          python3 - <<'PY'
+          import json, sys, tomllib
+
+          cfg = json.load(open("config.json", encoding="utf-8"))
+          pid, ver = cfg["id"], cfg["version"]
+          errors = []
+
+          cargo_ver = tomllib.load(open("Cargo.toml", "rb"))["package"]["version"]
+          if cargo_ver != ver:
+              errors.append(f"Cargo.toml 的 version 是 {cargo_ver}，config.json 是 {ver}")
+
+          lock = tomllib.load(open("Cargo.lock", "rb"))
+          locked = {p["name"]: p["version"] for p in lock.get("package", [])}
+          if locked.get(pid) != ver:
+              errors.append(f"Cargo.lock 里 {pid} 是 {locked.get(pid)}，config.json 是 {ver}")
+
+          print(f"id={pid} version={ver}（已弃用，产物仅供留档）")
+          for e in errors:
+              print("error: " + e, file=sys.stderr)
+          sys.exit(1 if errors else 0)
+          PY
+
+      - name: 格式
+        run: cargo fmt --all --check
+
+      - name: 编译 wasm 目标
+        run: cargo check --locked --target wasm32-wasip1
+
+      - name: 测试
+        run: cargo test --locked
 
       - name: 构建并打包
         run: bash scripts/pack.sh
@@ -40,15 +70,3 @@ jobs:
           name: plugin-package
           path: dist/*.zip
           if-no-files-found: error
-
-      - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          id=$(python3 -c 'import json;print(json.load(open("config.json"))["id"])')
-          ver=$(python3 -c 'import json;print(json.load(open("config.json"))["version"])')
-          gh release create "v$ver" "dist/$id-$ver.zip" \
-            --title "v$ver" --generate-notes \
-            || gh release upload "v$ver" "dist/$id-$ver.zip" --clobber

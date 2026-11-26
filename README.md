@@ -1,6 +1,9 @@
 # rcgui-plugin-oneclick
 
-**The one-click rclone plugin for RCGUI** — find a local `rclone.exe`, verify it really is rclone, download a fresh one if there isn't any, launch it as `rclone rcd`, and hand the RC endpoint back to the host.
+> **Deprecated (0.4.1) — built into the app.** Installing, starting and stopping rclone is RCGUI's own job now. This plugin no longer starts, stops or installs any rclone process, and no new versions will be released.
+> To carry your settings and history over, follow [MIGRATION.md](MIGRATION.md). The source is kept as a reference implementation: `config.json` no longer declares `on_start` / `on_exit`, the install / start / stop buttons only return a deprecation notice, and nothing in the plugin's kv store was deleted.
+
+**The one-click rclone plugin for RCGUI** — it used to find a local `rclone.exe`, verify it really is rclone, download a fresh one if there wasn't any, launch it as `rclone rcd`, and hand the RC endpoint back to the host. Since 0.4.1 the app core does all of that; this repository is the reference for how it was done.
 
 English | [简体中文](README.zh-CN.md)
 
@@ -11,11 +14,13 @@ This repository holds the plugin only: Rust source, `config.json`, packaging scr
 
 The plugin is `"builtin": true` and `"platform": "windows"`: it ships inside RCGUI's own assets and is never fetched through `plugins/manifest.json`. It is also the one plugin allowed to make assumptions about Windows, because rclone's official builds for this flow are Windows binaries.
 
-RCGUI never starts rclone itself. This plugin is the exception that keeps that promise honest: it declares `proc` and `net` instead of `rclone`, so it spawns `rclone rcd` as a child process and health-checks the port on its own, then tells the host "connect here". Install, start, stop, autostart-on-launch and stop-on-exit all live here.
+RCGUI never starts rclone itself. This plugin is the exception that keeps that promise honest: it declares `proc` and `net` instead of `rclone`, so it spawns `rclone rcd` as a child process and health-checks the port on its own, then tells the host "connect here". Install, start, stop, autostart-on-launch and stop-on-exit all lived here before 0.4.1; that flow now lives in the app core, and the code stays in this repository as a reference.
 
-`config.json` wires the lifecycle to panel actions: `on_start` runs `auto_start`, `on_exit` runs `stop_on_exit` — which is why quitting RCGUI takes the rclone child down with it unless you turn that off.
+Before 0.4.1, `config.json` wired the lifecycle to panel actions (`on_start` ran `auto_start`, `on_exit` ran `stop_on_exit`), so quitting RCGUI took the rclone child down with it. Both hooks are gone: the lifecycle belongs to the app core, and a plugin that manages it too would put two rclone processes on one port and have them kill each other on exit.
 
-## Features
+## What it used to do (before 0.4.1)
+
+None of this runs now — it is listed so the migration reference and the code make sense. The app core performs every stage below itself.
 
 | Stage | What it does |
 | --- | --- |
@@ -34,7 +39,9 @@ RCGUI never starts rclone itself. This plugin is the exception that keeps that p
 
 ## Panel
 
-Four groups, top to bottom in the order I would work through them: pin down the executable, install if needed, settle the launch arguments, decide the start policy.
+Four groups, top to bottom in the order the flow used to be worked through: pin down the executable, install if needed, settle the launch arguments, decide the start policy. Only the reading actions still do anything — `state`, browse, search, re-check and history. Download and install, start, autostart and stop answer with a deprecation notice and touch no process; the app core owns that job now.
+
+Everything sits on one page, `settings` (`设置` / Settings), so a host that draws page tabs shows this panel as a single named group. The run-state line stays above the pages because the host renders one status line for the whole plugin. A host older than 0.3.0 ignores the page and lays every control out flat.
 
 Labels below are the English strings; the panel carries the Chinese original next to every one of them (see [Languages](#languages)).
 
@@ -108,15 +115,20 @@ pwsh -File scripts/pack.ps1
 Under bash, `bash scripts/pack.sh` does the same thing: build the wasm, assemble `dist/<id>-<version>/` (`config.json`, `main.wasm`, `check.sha256`), zip it, and name everything after the `id` this plugin actually uses (`onerclone`). Because it is a builtin plugin, a release needs no change to the host manifest — rebuilding RCGUI picks up the new version.
 
 ```
-config.json                     identity, capabilities, lifecycle, the whole panel
+config.json                     identity, capabilities, the whole panel (no lifecycle hooks since 0.4.1)
 src/main.rs                     the plugin itself, single file
 src/i18n.rs                     language tag handling and message formatting
 src/i18n.json                   Chinese message id -> English string
 Cargo.toml                      wasm build settings and dependencies
 scripts/pack.ps1                build, assemble dist/<id>-<version>, print sha256
 scripts/pack.sh                 same, for bash and CI
-.github/workflows/release.yml   tag -> check version -> build -> GitHub Release
+.github/workflows/release.yml   manual workflow_dispatch -> build -> upload artifact (no Release)
+.github/workflows/ci.yml        every push / PR: fmt --check, test, check(wasm32-wasip1)
+MIGRATION.md                    moving the old kv data into the app core
+CHANGELOG.md                    version history
 ```
+
+To repackage, run the `release` workflow by hand from the Actions tab. It only uploads an artifact: it does not touch Releases and does not feed the host repository's plugin bundle.
 
 ## Plugin protocol
 
